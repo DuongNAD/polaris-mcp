@@ -89,10 +89,17 @@ export async function initSubject(
   const p = subjectPaths(subjectDir);
   await mkdir(p.polarisDir, { recursive: true });
   await mkdir(p.capturesDir, { recursive: true });
+  await mkdir(p.researchDir, { recursive: true });
+  await mkdir(p.cacheDir, { recursive: true });
 
-  // Create .gitignore inside polaris/
+  // Create or update .gitignore inside polaris/
   if (!existsSync(p.gitignore)) {
-    await atomicWriteFile(p.gitignore, "captures/\n");
+    await atomicWriteFile(p.gitignore, "captures/\n.cache/\n");
+  } else {
+    const gitignoreContent = await readFile(p.gitignore, "utf8").catch(() => "");
+    if (!gitignoreContent.includes(".cache/")) {
+      await atomicWriteFile(p.gitignore, gitignoreContent.trim() + "\n.cache/\n");
+    }
   }
 
   // Parse brief

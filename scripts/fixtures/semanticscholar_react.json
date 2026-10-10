@@ -1,0 +1,28 @@
+{
+  "total": 1,
+  "data": [
+    {
+      "paperId": "a1b2c3d4e5f6",
+      "title": "ReAct: Synergizing Reasoning and Acting in Language Models",
+      "year": 2022,
+      "venue": "ICLR",
+      "citationCount": 1420,
+      "authors": [
+        { "name": "Shunyu Yao" },
+        { "name": "Jeffrey Zhao" },
+        { "name": "Karthik Narasimhan" }
+      ],
+      "externalIds": {
+        "DOI": "10.48550/arXiv.2210.03629",
+        "ArXiv": "2210.03629"
+      },
+      "openAccessPdf": {
+        "url": "https://arxiv.org/pdf/2210.03629.pdf"
+      },
+      "tldr": {
+        "text": "ReAct combines reasoning and acting in language models to solve complex tasks."
+      },
+      "abstract": "While large language models have shown great capabilities, combining reasoning and action leads to stronger interactive agents."
+    }
+  ]
+}

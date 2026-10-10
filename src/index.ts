@@ -11,9 +11,16 @@ import { resolve } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { captureSources } from "./capture.js";
 import { checkQualityGates } from "./check.js";
 import { guideText, TOPICS } from "./guide.js";
 import { renderRoadmapMarkdown } from "./render.js";
+import {
+  findResearch,
+  RESEARCH_PROVIDERS,
+  ResearchProvider,
+  runResearch,
+} from "./research.js";
 import {
   addFacts,
   addSources,
@@ -30,6 +37,15 @@ import {
   updateSources,
 } from "./store.js";
 import { errMsg, subjectPaths, VERSION } from "./util.js";
+
+export * from "./schema.js";
+export * from "./store.js";
+export * from "./capture.js";
+export * from "./check.js";
+export * from "./render.js";
+export * from "./guide.js";
+export * from "./research.js";
+export * from "./util.js";
 
 type Content = { type: "text"; text: string };
 type ToolResult = { content: Content[]; isError?: boolean };
@@ -50,21 +66,25 @@ async function safe(fn: () => Promise<ToolResult>): Promise<ToolResult> {
 const INSTRUCTIONS = `Polaris MCP builds evidence-based personal study courses for self-learners from brief to roadmap.
 
 Workflow:
-1. polaris_guide (overview and topics "pipeline", "gates", "sources", "roadmap", "learner", "rules").
-2. polaris_profile { action: "get" } to read learner methods and preferences, or "update" to adjust.
-3. polaris_start { subject_dir, brief } to initialize the subject brief and polaris folder.
-4. polaris_source_add { subject_dir, sources } to register and capture sources (web pages, arXiv papers, local notes).
+1. polaris_guide (topics: "overview", "pipeline", "gates", "sources", "roadmap", "research", "learner", "rules").
+2. polaris_profile { action: "get" } to read learner methods, or "update" to adjust preferences.
+3. polaris_start { subject_dir, brief } to initialize subject brief and polaris folder.
+4. Research & Discovery:
+   - polaris_find { query, providers?, limit?, year_from?, lang? } to discover materials across keyless providers.
+   - polaris_research { subject_dir, queries, providers?, auto_add? } to run multi-query search, generate tracked shortlist in polaris/research/, and optionally auto-add top items.
+   - polaris_source_add { subject_dir, sources } to register sources with automatic capture.
+   - polaris_capture { subject_dir, ids?, full? } to capture full-text (PDF via pdftotext with page markers, YouTube transcripts via yt-dlp with timestamps, web/Wikipedia text).
 5. polaris_fact_add { subject_dir, facts } to record discrete factual claims with locators.
-6. polaris_roadmap_save { subject_dir, roadmap } to validate quality gates and render ROADMAP.md.
+6. polaris_roadmap_save { subject_dir, roadmap } to validate quality gates and render ROADMAP.md in Vietnamese.
 7. polaris_check { subject_dir } to verify that all quality gates pass.
 
 Rules:
-- Evidence first: every factual bullet points to facts; every fact points to a source + locator (page/timestamp/section/lines).
+- Evidence first: every factual bullet points to facts; every fact points to a source + locator (page [p. N], timestamp [mm:ss], section, lines).
 - Labels: [Khóa học] (learner source of truth), [Mở rộng] (extensions), (chưa xác minh) (unverified). Numbers and dates must be cross-checked or marked unverified.
 - Learner fit: learner-facing text in the learner's language (Vietnamese by default with correct diacritics); no emoji; no overclaims.
+- Review gate: show the top 10 research candidates with evaluation reasons and wait for approval unless auto_add is explicitly specified.
 - Do not write solution code for assignments; adhere to AGENTS.md rules.
-- Never scan D: recursively (find, grep -r, dir /s, Get-ChildItem -Recurse); use smart-drive MCP for local search.
-- NotebookLM and DeepTutor answers are registered as sources with the notebook/question as locator.
+- Never scan D: recursively; open files directly or use smart-drive MCP.
 
 Done when:
 polaris_check reports 0 errors and ROADMAP.md is rendered with all 10 standard sections.`;
@@ -78,7 +98,7 @@ async function startMcp(): Promise<void> {
     {
       title: "Polaris course creation guide",
       description:
-        "READ FIRST. How to build evidence-based courses: pipeline, quality gates, source policy, roadmap format, learner preferences, and rules. No arguments = overview.",
+        "READ FIRST. How to build evidence-based courses: pipeline, quality gates, source policy, roadmap format, research engine, learner preferences, and rules. No arguments = overview.",
       inputSchema: {
         topic: z.enum(TOPICS).optional().describe(`One of: ${TOPICS.join(" | ")}`),
       },
@@ -121,7 +141,7 @@ async function startMcp(): Promise<void> {
     {
       title: "Start a course workspace",
       description:
-        "Initialize or update the course brief in `<subject_dir>/polaris/brief.json` and set up git-ignored captures. Returns validated brief and next steps.",
+        "Initialize or update the course brief in `<subject_dir>/polaris/brief.json` and set up git-ignored captures and cache. Returns validated brief and next steps.",
       inputSchema: {
         subject_dir: z.string().min(1).describe("Subject directory path"),
         brief: z.union([z.record(z.string(), z.unknown()), z.string()]).describe(
@@ -146,13 +166,119 @@ async function startMcp(): Promise<void> {
         }
         lines.push(
           "",
-          "Next step: Register primary sources with polaris_source_add, then extract facts with polaris_fact_add.",
+          "Next step: Discover materials with polaris_find or polaris_research, register sources with polaris_source_add, then extract facts with polaris_fact_add.",
         );
         return text(lines.join("\n"));
       }),
   );
 
-  /* 4. polaris_source_add */
+  /* 4. polaris_find */
+  server.registerTool(
+    "polaris_find",
+    {
+      title: "Find research and learning material",
+      description:
+        "Discover learning material across keyless providers (openalex, arxiv, semanticscholar, crossref, wikipedia, github, youtube, brave). Returns ranked results with scores, reasons, and open-access links without modifying subject registry.",
+      inputSchema: {
+        query: z.string().min(1).describe("Search query string"),
+        providers: z.array(z.enum(RESEARCH_PROVIDERS)).optional().describe("Specific providers to query"),
+        limit: z.number().int().min(1).max(50).default(10).optional().describe("Max number of results to return"),
+        year_from: z.number().int().min(1900).max(2030).optional().describe("Filter publications from this year onwards"),
+        lang: z.string().optional().describe("Language preference (e.g. 'vi' or 'en')"),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ query, providers, limit, year_from, lang }) =>
+      safe(async () => {
+        const results = await findResearch(query, { providers, limit, year_from, lang });
+        if (results.length === 0) {
+          return text(`No research results found for query: "${query}"`);
+        }
+        const lines = [
+          `Found ${results.length} research result(s) for "${query}":`,
+          "",
+          ...results.map((r) => {
+            const oa = r.oaUrl || r.provider === "arxiv" ? "[OA Full-Text]" : "";
+            const yr = r.year ? `(${r.year})` : "";
+            const cit = typeof r.citations === "number" ? `[${r.citations.toLocaleString()} cites/views]` : "";
+            const reasons = r.reasons && r.reasons.length > 0 ? ` -> Reasons: ${r.reasons.slice(0, 2).join("; ")}` : "";
+            return `[#${r.rank}] (${r.provider}/${r.kind}) "${r.title}" ${yr} ${cit} ${oa} - Score: ${r.score}/100\n  Link: ${r.url}${reasons}`;
+          }),
+        ];
+        return text(lines.join("\n"));
+      }),
+  );
+
+  /* 5. polaris_research */
+  server.registerTool(
+    "polaris_research",
+    {
+      title: "Run multi-query research investigation",
+      description:
+        "Execute a multi-query research hunt across providers with rate limits, 24h caching in polaris/.cache/, de-duplication, and ranking. Generates shortlist file polaris/research/<yyyy-mm-dd>-<slug>.md. Optionally auto-adds and captures top N sources.",
+      inputSchema: {
+        subject_dir: z.string().min(1).describe("Subject directory path"),
+        module: z.string().optional().describe("Target module ID e.g. 'M1'"),
+        queries: z.array(z.string().min(1)).min(1).describe("List of search queries to execute"),
+        providers: z.array(z.enum(RESEARCH_PROVIDERS)).optional().describe("Providers to query"),
+        per_provider: z.number().int().min(1).max(30).default(5).optional().describe("Max items to fetch per provider per query"),
+        year_from: z.number().int().min(1900).max(2030).optional().describe("Filter publications from this year onwards"),
+        auto_add: z.number().int().min(0).max(20).default(0).optional().describe("Auto-add top N items to sources.json and capture them"),
+        lang: z.string().optional().describe("Language preference (e.g. 'vi' or 'en')"),
+      },
+      annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    },
+    async ({ subject_dir, module: mod, queries, providers, per_provider, year_from, auto_add, lang }) =>
+      safe(async () => {
+        const res = await runResearch(subject_dir, {
+          module: mod,
+          queries,
+          providers,
+          per_provider,
+          year_from,
+          auto_add,
+          lang,
+        });
+
+        const lines = [
+          `Research investigation complete for ${queries.length} query(s).`,
+          `Shortlist saved: ${res.shortlistPath}`,
+          `Total discovered & ranked items: ${res.items.length}`,
+          "",
+          "Top Candidates (Review Gate):",
+          ...res.items.slice(0, 10).map((it) => {
+            const yr = it.year ? `(${it.year})` : "";
+            const cit = typeof it.citations === "number" ? `[${it.citations.toLocaleString()} cites]` : "";
+            const oa = it.oaUrl || it.provider === "arxiv" ? "[OA]" : "";
+            const reasons = it.reasons ? ` - ${it.reasons.slice(0, 2).join("; ")}` : "";
+            return `  ${it.rank}. [Score ${it.score}] (${it.kind}) "${it.title}" ${yr} ${cit} ${oa}\n     Link: ${it.url}${reasons}`;
+          }),
+        ];
+
+        if (res.autoAdded.length > 0) {
+          lines.push(
+            "",
+            `Auto-added and captured ${res.autoAdded.length} source(s):`,
+            ...res.autoAdded.map((s) => `  - [${s.id}] "${s.title}" [${s.label}] (Quality: ${s.quality.score}/5)`),
+          );
+        }
+
+        if (res.autoErrors.length > 0) {
+          lines.push("", "Auto-add warnings/errors:", ...res.autoErrors.map((e) => `  - ${e}`));
+        }
+
+        if (!auto_add || auto_add === 0) {
+          lines.push(
+            "",
+            "Review Gate: Review the top candidates above. Use polaris_source_add to register approved items, or call polaris_research with auto_add > 0.",
+          );
+        }
+
+        return text(lines.join("\n"));
+      }),
+  );
+
+  /* 6. polaris_source_add */
   server.registerTool(
     "polaris_source_add",
     {
@@ -198,7 +324,35 @@ async function startMcp(): Promise<void> {
       }),
   );
 
-  /* 5. polaris_sources */
+  /* 7. polaris_capture */
+  server.registerTool(
+    "polaris_capture",
+    {
+      title: "Capture source full-text content",
+      description:
+        "Capture full text for registered sources (open-access PDF via pdftotext with page markers, YouTube transcripts via yt-dlp with timestamps, web articles via built-in extractor, Wikipedia extracts) into `captures/<id>.md`. Capped at 400 KB.",
+      inputSchema: {
+        subject_dir: z.string().min(1).describe("Subject directory path"),
+        ids: z.array(z.string().min(1)).optional().describe("Specific source IDs to capture (e.g. ['S1', 'S2']). If omitted, captures all uncaptured sources."),
+        full: z.boolean().default(true).optional().describe("Attempt full-text extraction for PDFs and videos"),
+      },
+      annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ subject_dir, ids, full }) =>
+      safe(async () => {
+        const res = await captureSources(subject_dir, ids, full ?? true);
+        const lines = [`Processed capture for ${res.captured.length} source(s).`];
+        if (res.captured.length > 0) {
+          lines.push("", "Captures:", ...res.captured.map((c) => `  - [${c.id}] ${c.title} (${c.preview.slice(0, 100)}...)`));
+        }
+        if (res.errors.length > 0) {
+          lines.push("", "Errors:", ...res.errors.map((e) => `  - ${e}`));
+        }
+        return text(lines.join("\n"), res.errors.length > 0 && res.captured.length === 0);
+      }),
+  );
+
+  /* 8. polaris_sources */
   server.registerTool(
     "polaris_sources",
     {
@@ -238,13 +392,13 @@ async function startMcp(): Promise<void> {
       }),
   );
 
-  /* 6. polaris_fact_add */
+  /* 9. polaris_fact_add */
   server.registerTool(
     "polaris_fact_add",
     {
       title: "Add verified facts",
       description:
-        "Record discrete factual claims in `facts.json` pointing to a source ID and locator (e.g. timestamp, page, section, line numbers).",
+        "Record discrete factual claims in `facts.json` pointing to a source ID and locator (e.g. timestamp [mm:ss], page [p. N], section, line numbers).",
       inputSchema: {
         subject_dir: z.string().min(1).describe("Subject directory path"),
         facts: z
@@ -253,7 +407,7 @@ async function startMcp(): Promise<void> {
               id: z.string().optional().describe("Fact ID (e.g. F1; auto-assigned if omitted)"),
               claim: z.string().min(1).describe("Claim statement in learner language"),
               source: z.string().min(1).describe("Source ID (e.g. S1)"),
-              locator: z.string().min(1).describe("Locator in source e.g. '02:13', 'p. 4', 'Sec. 2.1', 'lines 12-25'"),
+              locator: z.string().min(1).describe("Locator in source e.g. '02:13', '[p. 4]', 'Sec. 2.1', 'lines 12-25'"),
               label: z.enum(["course", "extension", "unverified"]).optional(),
               modules: z.array(z.string().min(1)).min(1).describe("Target module IDs e.g. ['M1']"),
               crossCheck: z.array(z.string().min(1)).optional().describe("Cross checking source IDs for numbers/dates"),
@@ -278,7 +432,7 @@ async function startMcp(): Promise<void> {
       }),
   );
 
-  /* 7. polaris_facts */
+  /* 10. polaris_facts */
   server.registerTool(
     "polaris_facts",
     {
@@ -299,7 +453,7 @@ async function startMcp(): Promise<void> {
       }),
   );
 
-  /* 8. polaris_roadmap_save */
+  /* 11. polaris_roadmap_save */
   server.registerTool(
     "polaris_roadmap_save",
     {
@@ -332,7 +486,7 @@ async function startMcp(): Promise<void> {
       }),
   );
 
-  /* 9. polaris_check */
+  /* 12. polaris_check */
   server.registerTool(
     "polaris_check",
     {
@@ -395,13 +549,14 @@ async function startMcp(): Promise<void> {
               `Sources of truth: ${sources ?? "official video transcripts and notebooks"}`,
               "",
               "Follow the Polaris workflow and quality gates:",
-              "1. polaris_guide to review pipeline and gates.",
+              "1. polaris_guide to review pipeline, gates, and research methods.",
               "2. polaris_profile { action: 'get' } to inspect learner methods (theory -> memory anchors -> paper notebook -> practice easy-to-hard; predict-then-run).",
               "3. polaris_start to initialize polaris/brief.json with measurable outcome checks.",
-              "4. polaris_source_add to register and capture all primary sources.",
-              "5. polaris_fact_add to extract key claims with locators.",
-              "6. polaris_roadmap_save to structure modules (why, outputs, core citing facts, misconceptions, materials with minutes, 3 practice tiers with DoD, 4+ self-check questions with predict, checkpoint) and render ROADMAP.md in Vietnamese.",
-              "7. polaris_check to verify 0 errors.",
+              "4. polaris_research / polaris_find to discover literature and tutorials across keyless providers.",
+              "5. polaris_source_add / polaris_capture to register and capture primary materials and open-access PDFs.",
+              "6. polaris_fact_add to extract key claims with locators (pages, timestamps).",
+              "7. polaris_roadmap_save to structure modules (why, outputs, core citing facts, misconceptions, materials with minutes, 3 practice tiers with DoD, 4+ self-check questions with predict, checkpoint) and render ROADMAP.md in Vietnamese.",
+              "8. polaris_check to verify 0 errors.",
             ].join("\n"),
           },
         },
@@ -413,7 +568,7 @@ async function startMcp(): Promise<void> {
     "research",
     {
       title: "Research sources and facts for a module",
-      description: "Gather and verify primary sources and facts for one module",
+      description: "Discover and verify primary sources and facts for one module",
       argsSchema: {
         subject_dir: z.string().describe("Subject directory path"),
         module_id: z.string().describe("Module ID e.g. M1"),
@@ -429,10 +584,12 @@ async function startMcp(): Promise<void> {
             text: [
               `Research verified sources and facts for Module ${module_id} (${topic}) in course at ${subject_dir}.`,
               "",
-              "1. Register sources with polaris_source_add (arXiv, official docs, local files).",
-              "2. Extract facts with polaris_fact_add with precise locators (timestamp, page, section, lines).",
-              "3. Cross-check numerical/date claims or mark them unverified.",
-              "4. Check that facts are tagged for module " + module_id + ".",
+              "1. Discover candidates using polaris_research with targeted queries across keyless providers (openalex, arxiv, semanticscholar, crossref, wikipedia, youtube, github).",
+              "2. Review the generated shortlist in polaris/research/ with top candidates, scores, and evaluation reasons (Review Gate).",
+              "3. Register approved primary sources with polaris_source_add (or auto_add) and verify full-text captures in captures/<id>.md with polaris_capture.",
+              "4. Extract discrete factual claims with polaris_fact_add with precise locators (timestamp [mm:ss], page [p. N], section, lines).",
+              "5. Cross-check numerical/date claims or mark them unverified.",
+              "6. Check that facts are tagged for module " + module_id + ".",
             ].join("\n"),
           },
         },
@@ -539,15 +696,25 @@ async function cli(args: string[]): Promise<number> {
 }
 
 // Entrypoint
-if (import.meta.url === `file://${process.argv[1]?.replace(/\\/g, "/")}` || !process.argv[1] || process.argv[1].endsWith("polaris.mjs") || process.argv[1].endsWith("index.ts")) {
+import { fileURLToPath } from "node:url";
+import { basename } from "node:path";
+
+const isMain =
+  Boolean(process.argv[1]) &&
+  (resolve(process.argv[1]!) === fileURLToPath(import.meta.url) ||
+    basename(process.argv[1]!).startsWith("polaris"));
+
+if (isMain) {
   const isCli = process.argv.length > 2 && !["mcp"].includes(process.argv[2]!);
   if (isCli) {
-    cli(process.argv.slice(2)).then((code) => {
-      if (code !== 0) process.exit(code);
-    }).catch((err) => {
-      console.error(errMsg(err));
-      process.exit(1);
-    });
+    cli(process.argv.slice(2))
+      .then((code) => {
+        if (code !== 0) process.exit(code);
+      })
+      .catch((err) => {
+        console.error(errMsg(err));
+        process.exit(1);
+      });
   } else {
     startMcp().catch((err) => {
       console.error("Failed to start Polaris MCP server:", errMsg(err));

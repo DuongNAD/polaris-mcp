@@ -1,0 +1,47 @@
+{
+  "results": [
+    {
+      "id": "https://openalex.org/W4298135768",
+      "doi": "https://doi.org/10.48550/arxiv.2210.03629",
+      "title": "ReAct: Synergizing Reasoning and Acting in Language Models",
+      "display_name": "ReAct: Synergizing Reasoning and Acting in Language Models",
+      "publication_year": 2023,
+      "cited_by_count": 1420,
+      "type": "article",
+      "authorships": [
+        { "author": { "display_name": "Shunyu Yao" } },
+        { "author": { "display_name": "Jeffrey Zhao" } },
+        { "author": { "display_name": "Karthik Narasimhan" } }
+      ],
+      "primary_location": {
+        "source": { "display_name": "ICLR 2023" },
+        "landing_page_url": "https://arxiv.org/abs/2210.03629",
+        "pdf_url": "https://arxiv.org/pdf/2210.03629"
+      },
+      "open_access": {
+        "is_oa": true,
+        "oa_url": "https://arxiv.org/pdf/2210.03629"
+      },
+      "abstract_inverted_index": {
+        "While": [0],
+        "large": [1],
+        "language": [2, 17],
+        "models": [3],
+        "have": [4],
+        "demonstrated": [5],
+        "impressive": [6],
+        "performance,": [7],
+        "we": [8],
+        "explore": [9],
+        "ReAct": [10],
+        "interleaving": [11],
+        "reasoning": [12],
+        "traces": [13],
+        "and": [14],
+        "actions": [15],
+        "for": [16],
+        "agents.": [18]
+      }
+    }
+  ]
+}

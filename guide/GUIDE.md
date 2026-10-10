@@ -104,6 +104,41 @@ The rendered `ROADMAP.md` mirrors the gold-standard 10-section layout in Vietnam
 - **9. Theo dõi tiến độ:** Checklist of completed modules and milestones.
 - **10. Nguồn tham khảo:** Generated bibliography table from `sources.json`.
 
+## research
+
+Polaris v0.2a includes an autonomous research and discovery engine with keyless providers, transparent ranking, de-duplication, and open-access capture.
+
+**Keyless Providers:**
+- **`openalex`:** Query `api.openalex.org/works`. Extracts metadata, publication year, citations, reconstructed abstracts from inverted indices, and open-access PDF locations.
+- **`arxiv`:** Query `export.arxiv.org/api/query` (Atom XML API; rate limited to 1 call every 3 seconds). Extracts preprints and downloads open-access PDFs.
+- **`semanticscholar`:** Query `api.semanticscholar.org/graph/v1/paper/search`. Retrieves titles, authors, venues, TL;DR summaries, citations, and open-access PDF links with exponential backoff on HTTP 429/503.
+- **`crossref`:** Query `api.crossref.org/works`. Resolves DOIs, journal publications, and books.
+- **`wikipedia`:** Query `vi` and `en` Wikipedia APIs. Extracts summaries and structured plain text overviews.
+- **`github`:** Query `api.github.com/search/repositories`. Discovers official code implementations and tools (10 req/min unauthenticated rate limit).
+- **`youtube`:** Discover video lectures and tutorials via `yt-dlp` flat-playlist search.
+- **`brave`:** Optional general web search if `BRAVE_API_KEY` is provided.
+
+**Ranking Factors & Evaluation Reasons:**
+Every discovered item is scored (0-100) and comes with explicit, human-readable reasons:
+1. **Type Priority:** Course source of truth > Official specs / papers > Books / tutorials > Videos / repos / web.
+2. **Relevance:** Exact query and module keyword matches in titles (high weight) and abstracts/summaries.
+3. **Authority:** Log-scaled citation counts (`Math.log10(citations + 1)`), GitHub stars, and peer-reviewed venues (e.g. ICLR, NeurIPS, ICML, Nature).
+4. **Recency:** Boosts recent work (>= 2022) and respects `year_from` filters, while preserving classics with high citation authority.
+5. **Open Access:** Prioritizes open-access full-text PDFs and freely accessible content (+10 score).
+6. **Language:** Aligns with learner language preferences (Vietnamese / English).
+
+**Courtesy & Law Rules:**
+- **Polite User-Agent:** `Polaris/0.2 (personal study course builder; https://github.com/DuongNAD) Node.js/...`
+- **Rate Limits & Backoff:** Per-provider request rate limits with automatic exponential backoff on HTTP 429/503.
+- **robots.txt:** Evaluated and cached per host before fetching arbitrary web pages for capture.
+- **Open Access Only:** Captures only open-access PDFs, public YouTube transcripts, Wikipedia text, and open web pages. Never bypasses paywalls.
+- **Local Personal Study Copies:** Third-party captures (`polaris/captures/`) and query caches (`polaris/.cache/`, 24h TTL) are strictly git-ignored.
+
+**The Review Gate:**
+When running research (`polaris_research`), Polaris generates a tracked shortlist file (`polaris/research/<yyyy-mm-dd>-<slug>.md`) containing the ranked table and evaluation reasons.
+- **Review Gate Workflow:** By default (`auto_add: 0`), the agent presents the top 10 candidates with their scores and evaluation reasons, then pauses to wait for learner approval before adding items to `sources.json`.
+- **Auto Mode:** If the learner explicitly requests automated sourcing (`auto_add > 0`), the top N items are automatically registered in `sources.json` (labeled `extension` unless matching a brief `sourcesOfTruth`), scored, and captured into `captures/<id>.md`.
+
 ## learner
 
 **The Learner Method & Preferences:**

@@ -165,3 +165,4 @@ pirated copies), captures stay git-ignored and are only for personal study.
 
 ## Status
 - 2026-10-10: v0.1 built and verified (MCP stdio server, CLI, Zod schemas with corrective error suggestions, source capture for web/arXiv/local, quality gates, Vietnamese ROADMAP.md rendering, e2e test suite passing).
+- 2026-10-10: v0.2a research engine built and verified (`polaris_find`, `polaris_research`, `polaris_capture`, keyless providers OpenAlex/arXiv/SemanticScholar/CrossRef/Wikipedia/GitHub/YouTube, transparent ranking with reasons, de-duplication, 24h cache in `polaris/.cache/`, Vietnamese shortlist files in `polaris/research/`, full-text open-access PDF extraction via pdftotext with page markers, YouTube transcript extraction via yt-dlp, robots.txt check, rate limits & retry backoff, review gate, extended e2e test suite passing).

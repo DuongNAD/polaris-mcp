@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
@@ -7,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 export const VERSION = "0.1.0";
 export const PKG_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-export const UA = `Polaris/${VERSION} (personal study course builder; Model Context Protocol server) Node.js/${process.versions.node}`;
+export const UA = `Polaris/0.2 (personal study course builder; https://github.com/DuongNAD) Node.js/${process.versions.node}`;
 
 export function hubDir(): string {
   return resolve(process.env.POLARIS_HUB ?? "D:/02_Learning_Knowledge");
@@ -27,6 +28,8 @@ export interface SubjectPaths {
   roadmapJson: string;
   scheduleJson: string;
   capturesDir: string;
+  researchDir: string;
+  cacheDir: string;
   gitignore: string;
   defaultRoadmapMd: string;
 }
@@ -49,6 +52,8 @@ export function subjectPaths(target: string): SubjectPaths {
     roadmapJson: join(polarisDir, "roadmap.json"),
     scheduleJson: join(polarisDir, "schedule.json"),
     capturesDir: join(polarisDir, "captures"),
+    researchDir: join(polarisDir, "research"),
+    cacheDir: join(polarisDir, ".cache"),
     gitignore: join(polarisDir, ".gitignore"),
     defaultRoadmapMd: join(dir, "04_Roadmaps", "ROADMAP.md"),
   };
@@ -117,6 +122,247 @@ export async function fetchWithTimeout(url: string, init: RequestInit = {}, ms =
   } finally {
     clearTimeout(timer);
   }
+}
+
+/* ───────── Rate Limiting & Retry on 429/503 ───────── */
+
+const lastRequestTime = new Map<string, number>();
+
+export async function rateLimitedDelay(provider: string, minIntervalMs: number): Promise<void> {
+  const now = Date.now();
+  const last = lastRequestTime.get(provider) ?? 0;
+  const elapsed = now - last;
+  if (elapsed < minIntervalMs) {
+    const waitMs = minIntervalMs - elapsed;
+    await new Promise((r) => setTimeout(r, waitMs));
+  }
+  lastRequestTime.set(provider, Date.now());
+}
+
+export async function fetchWithRetry(
+  url: string,
+  init: RequestInit = {},
+  ms = 20000,
+  maxRetries = 2,
+): Promise<Response> {
+  let attempt = 0;
+  while (true) {
+    attempt++;
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), ms);
+    try {
+      const res = await fetch(url, {
+        ...init,
+        signal: ctl.signal,
+        headers: {
+          "User-Agent": UA,
+          ...(init.headers ?? {}),
+        },
+      });
+
+      if ((res.status === 429 || res.status === 503) && attempt <= maxRetries) {
+        const retryAfterHeader = res.headers.get("retry-after");
+        let delayMs = attempt * 1500;
+        if (retryAfterHeader) {
+          const parsed = parseInt(retryAfterHeader, 10);
+          if (!isNaN(parsed) && parsed > 0 && parsed <= 10) {
+            delayMs = parsed * 1000;
+          }
+        }
+        await new Promise((r) => setTimeout(r, delayMs));
+        continue;
+      }
+      return res;
+    } catch (err) {
+      if (attempt <= maxRetries) {
+        await new Promise((r) => setTimeout(r, attempt * 1000));
+        continue;
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/* ───────── robots.txt Courtesy ───────── */
+
+const robotsCache = new Map<string, { rules: { userAgent: string; disallow: string[] }[]; fetchedAt: number }>();
+
+function parseRobotsTxt(txt: string): { userAgent: string; disallow: string[] }[] {
+  const sections: { userAgent: string; disallow: string[] }[] = [];
+  let currentUa: string | undefined;
+  let disallows: string[] = [];
+
+  for (const rawLine of txt.split("\n")) {
+    const line = rawLine.split("#")[0]!.trim();
+    if (!line) continue;
+    const colonIdx = line.indexOf(":");
+    if (colonIdx < 0) continue;
+    const field = line.slice(0, colonIdx).trim().toLowerCase();
+    const val = line.slice(colonIdx + 1).trim();
+
+    if (field === "user-agent") {
+      if (currentUa) {
+        sections.push({ userAgent: currentUa, disallow: disallows });
+        disallows = [];
+      }
+      currentUa = val.toLowerCase();
+    } else if (field === "disallow" && currentUa) {
+      if (val) disallows.push(val);
+    }
+  }
+  if (currentUa) {
+    sections.push({ userAgent: currentUa, disallow: disallows });
+  }
+  return sections;
+}
+
+export async function isUrlAllowedByRobots(urlStr: string): Promise<boolean> {
+  try {
+    const u = new URL(urlStr);
+    const hostKey = u.origin;
+    const now = Date.now();
+    let cached = robotsCache.get(hostKey);
+
+    if (!cached || now - cached.fetchedAt > 3600000) {
+      const robotsUrl = `${u.origin}/robots.txt`;
+      let rules: { userAgent: string; disallow: string[] }[] = [];
+      try {
+        const res = await fetchWithTimeout(robotsUrl, {}, 5000);
+        if (res.ok) {
+          const txt = await res.text();
+          rules = parseRobotsTxt(txt);
+        }
+      } catch {
+        // Assume allowed if unreachable
+      }
+      cached = { rules, fetchedAt: now };
+      robotsCache.set(hostKey, cached);
+    }
+
+    if (cached.rules.length === 0) return true;
+
+    const path = u.pathname + u.search;
+    for (const rule of cached.rules) {
+      const ua = rule.userAgent;
+      if (ua === "*" || ua.includes("polaris")) {
+        for (const dis of rule.disallow) {
+          if (dis && (dis === "/" || path.startsWith(dis))) {
+            return false;
+          }
+        }
+      }
+    }
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+/* ───────── External Program Detection & Safe Execution ───────── */
+
+const exeCache = new Map<string, string | null>();
+
+export function findExecutable(candidates: string[]): string | undefined {
+  const cacheKey = candidates.join("|");
+  if (exeCache.has(cacheKey)) {
+    return exeCache.get(cacheKey) ?? undefined;
+  }
+
+  const pathEnv = process.env.PATH || "";
+  const pathDirs = pathEnv.split(process.platform === "win32" ? ";" : ":");
+  const isWin = process.platform === "win32";
+
+  for (const cand of candidates) {
+    if (existsSync(cand)) {
+      exeCache.set(cacheKey, cand);
+      return cand;
+    }
+    for (const dir of pathDirs) {
+      const p = join(dir, cand);
+      if (existsSync(p)) {
+        exeCache.set(cacheKey, p);
+        return p;
+      }
+      if (isWin && !cand.toLowerCase().endsWith(".exe")) {
+        if (existsSync(p + ".exe")) {
+          exeCache.set(cacheKey, p + ".exe");
+          return p + ".exe";
+        }
+        if (existsSync(p + ".cmd")) {
+          exeCache.set(cacheKey, p + ".cmd");
+          return p + ".cmd";
+        }
+        if (existsSync(p + ".bat")) {
+          exeCache.set(cacheKey, p + ".bat");
+          return p + ".bat";
+        }
+      }
+    }
+  }
+
+  exeCache.set(cacheKey, null);
+  return undefined;
+}
+
+export async function runExecutable(
+  exePath: string,
+  args: string[],
+  options: { timeoutMs?: number; input?: string; cwd?: string } = {},
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const timeoutMs = options.timeoutMs ?? 25000;
+    const child = spawn(exePath, args, {
+      cwd: options.cwd,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let finished = false;
+
+    const timer = setTimeout(() => {
+      if (!finished) {
+        finished = true;
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // ignore
+        }
+        rejectPromise(new Error(`Execution timed out after ${timeoutMs}ms: ${basename(exePath)} ${args.join(" ")}`));
+      }
+    }, timeoutMs);
+
+    child.stdout.on("data", (d) => {
+      stdout += d.toString("utf8");
+    });
+    child.stderr.on("data", (d) => {
+      stderr += d.toString("utf8");
+    });
+
+    child.on("error", (err) => {
+      if (!finished) {
+        finished = true;
+        clearTimeout(timer);
+        rejectPromise(err);
+      }
+    });
+
+    child.on("close", (code) => {
+      if (!finished) {
+        finished = true;
+        clearTimeout(timer);
+        resolvePromise({ stdout, stderr, exitCode: code ?? 0 });
+      }
+    });
+
+    if (options.input) {
+      child.stdin.write(options.input);
+    }
+    child.stdin.end();
+  });
 }
 
 export const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));

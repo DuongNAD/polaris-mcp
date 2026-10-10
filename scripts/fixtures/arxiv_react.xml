@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2210.03629v3</id>
+    <published>2022-10-06T17:59:12Z</published>
+    <updated>2023-03-10T15:00:00Z</updated>
+    <title>ReAct: Synergizing Reasoning and Acting in Language Models</title>
+    <summary>While large language models (LLMs) have demonstrated impressive performance across tasks in language understanding and interactive decision making, their abilities for reasoning and acting have primarily been studied as separate topics. In this paper, we explore the use of LLMs to generate both reasoning traces and task-specific actions in an interleaved manner.</summary>
+    <author><name>Shunyu Yao</name></author>
+    <author><name>Jeffrey Zhao</name></author>
+    <author><name>Karthik Narasimhan</name></author>
+    <link title="pdf" href="http://arxiv.org/pdf/2210.03629v3" rel="related" type="application/pdf"/>
+  </entry>
+</feed>
