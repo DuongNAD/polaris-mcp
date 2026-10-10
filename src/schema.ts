@@ -560,3 +560,91 @@ export function validateReviewsData(raw: unknown): ValidationOutcome<ReviewsData
     errors: formatZodErrors(parsed.error.issues, ReviewsDataSchema.shape),
   };
 }
+
+/* ───────── Aurora Progress Events & Sync State ───────── */
+
+export const ProgressBaseEventSchema = z.object({
+  v: z.number().int().default(1),
+  t: z.string().min(1).describe("ISO 8601 timestamp with timezone offset"),
+  course: z.string().nullable().optional(),
+  lesson: z.string().min(1).describe("Lesson folder name"),
+  deck: z.string().optional(),
+  slide: z.number().int().min(1).describe("1-based slide index"),
+  slideId: z.string().nullable().optional(),
+});
+
+export const QuizProgressEventSchema = ProgressBaseEventSchema.extend({
+  type: z.literal("quiz"),
+  question: z.string().max(200),
+  chosen: z.array(z.number().int()),
+  answer: z.array(z.number().int()),
+  correct: z.boolean(),
+});
+
+export const PredictProgressEventSchema = ProgressBaseEventSchema.extend({
+  type: z.literal("predict"),
+  title: z.string().min(1),
+  prediction: z.string(),
+  rating: z.enum(["right", "different"]),
+  output: z.string().max(300),
+});
+
+export const RecallProgressEventSchema = ProgressBaseEventSchema.extend({
+  type: z.literal("recall"),
+  palace: z.string().min(1),
+  station: z.number().int().min(1),
+  place: z.string().min(1),
+  item: z.string().min(1),
+  rating: z.enum(["got", "missed"]),
+});
+
+export const CompleteProgressEventSchema = ProgressBaseEventSchema.extend({
+  type: z.literal("complete"),
+  slides: z.number().int().min(1),
+  quiz: z.string().nullable().optional(),
+  predictions: z.string().nullable().optional(),
+});
+
+export const ProgressEventSchema = z.discriminatedUnion("type", [
+  QuizProgressEventSchema,
+  PredictProgressEventSchema,
+  RecallProgressEventSchema,
+  CompleteProgressEventSchema,
+]);
+
+export type QuizProgressEvent = z.output<typeof QuizProgressEventSchema>;
+export type PredictProgressEvent = z.output<typeof PredictProgressEventSchema>;
+export type RecallProgressEvent = z.output<typeof RecallProgressEventSchema>;
+export type CompleteProgressEvent = z.output<typeof CompleteProgressEventSchema>;
+export type ProgressEvent = z.output<typeof ProgressEventSchema>;
+
+export const ProgressStateSchema = z.object({
+  updated: z.string().min(1),
+  processedHashes: z.array(z.string()).default([]),
+  dedupKeys: z.array(z.string()).default([]),
+  lastSyncedFiles: z.array(z.string()).optional(),
+  stats: z
+    .object({
+      totalEvents: z.number().int().default(0),
+      quizTotal: z.number().int().default(0),
+      quizCorrect: z.number().int().default(0),
+      predictRight: z.number().int().default(0),
+      predictDifferent: z.number().int().default(0),
+      recallGot: z.number().int().default(0),
+      recallMissed: z.number().int().default(0),
+      lessonsCompleted: z.array(z.string()).default([]),
+    })
+    .optional(),
+});
+
+export type ProgressState = z.output<typeof ProgressStateSchema>;
+
+export function validateProgressState(raw: unknown): ValidationOutcome<ProgressState> {
+  const parsed = ProgressStateSchema.safeParse(raw);
+  if (parsed.success) return { ok: true, value: parsed.data, errors: [] };
+  return {
+    ok: false,
+    errors: formatZodErrors(parsed.error.issues, ProgressStateSchema.shape),
+  };
+}
+

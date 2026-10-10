@@ -173,6 +173,62 @@ Track mastery, errors, and scheduled reviews:
 - **Task Synchronization:** `polaris_tasks_sync` appends lesson tasks and module checkpoints under `## Polaris` in `<subject>/TASKS.md` in standard hub format (`- [ ] [Deadline: YYYY-MM-DD 23:59] [Priority: P2] ...`), preserving file line endings and preventing duplicates via `polaris/tasks-map.json`.
 - **Daily Review Due:** `polaris_review_due` retrieves all lessons and error log items due on or before today, sorted oldest first, with concise review advice.
 
+## progress
+
+Aurora Slides records learner interactions as JSON Lines events in `<course_dir>/progress.jsonl` (or exported `aurora-progress-<slug>.jsonl`). `polaris_progress_sync` reads these events to close the learning loop:
+
+**Event Contract:**
+Each event is a JSON object on a single line:
+`{"v":1, "t":"<ISO 8601 with offset>", "course":"<title|null>", "lesson":"<dir>", "deck":"<title>", "slide":<1-based index>, "slideId":"<id|null>", "type":"quiz"|"predict"|"recall"|"complete", ...payload}`
+
+- **`quiz`:** `{"question": string (<=200 chars), "chosen": number[], "answer": number[], "correct": boolean}`
+- **`predict`:** `{"title": string, "prediction": string, "rating": "right" | "different", "output": string (<=300 chars)}`
+- **`recall`:** `{"palace": string, "station": number, "place": string, "item": string, "rating": "got" | "missed"}`
+- **`complete`:** `{"slides": number, "quiz": string | null, "predictions": string | null}`
+
+**Sync & Deduplication Engine:**
+- **Idempotency:** Every processed event's canonical hash is stored in `polaris/progress-state.json`. Running sync multiple times or merging exported files produces no duplicates.
+- **Error Log Generation ("Sổ lỗi"):**
+  - Wrong quiz answers (`correct === false`), predict gaps (`rating === "different"`), and missed palace stations (`rating === "missed"`) are automatically added to `polaris/errorlog.md` in Vietnamese and scheduled for spaced review (D+1, D+3, D+7, D+16, D+35).
+  - De-duplicated per `(lesson, slide, type, key)` so repeated incorrect attempts do not spam the error log.
+- **Lesson Completion:** `complete` events automatically mark the lesson done (`polaris_lesson_done`) with the event date and schedule spaced reviews.
+- **Summary & Actionable Guidance:** Returns per-lesson activity, quiz accuracy, prediction accuracy, missed palace stations, new error log entries, reviews due today, and 1-3 concrete suggestions for the next session.
+
+## aurora
+
+Polaris and Aurora Slides form a closed-loop personalized learning system:
+
+```
+Polaris (Plan & Structure)
+  -> polaris_profile & polaris_start: Learner profile and brief
+  -> polaris_research & polaris_fact_add: Keyless discovery & locators
+  -> polaris_roadmap_save: 10-section ROADMAP.md with quality gates
+  -> polaris_schedule: Topological sorting & slot fitting
+  -> polaris_export_course: Aurora course.json & lesson outline skeletons
+        |
+        v
+Aurora Slides (Interactive Active Learning)
+  -> Deck Authoring: Decks cite facts in `source` and verbatim code (`file` + `lines`)
+  -> aurora_audit: Typography, contrast, line limits
+  -> aurora preview: Interactive slide deck with quiz, predict, and memory palace walk
+  -> Event Stream: Writes learning events to <course_dir>/progress.jsonl
+        |
+        v
+Polaris (Tracking & Daily Guidance)
+  -> polaris_progress_sync: Ingests progress.jsonl into Sổ lỗi & spaced reviews
+  -> polaris_today: Generates 60m/30m session plan & Today's Dynamic Goal for learning hub
+```
+
+**End-to-End Steps:**
+1. **Export:** `polaris_export_course` outputs Aurora `course.json` and lesson outline skeletons (`polaris/lessons/<dir>.outline.md`).
+2. **Author:** Aurora decks are created according to outline skeletons, citing facts in `source` and pinning verbatim code.
+3. **Study & Practice:** The learner studies decks via Aurora preview server, answering quizzes, predicting code outputs, and recalling memory palace stations.
+4. **Capture:** Aurora logs events to `<course_dir>/progress.jsonl`.
+5. **Sync:** `polaris_progress_sync` ingests events into `polaris/errorlog.md` and `polaris/reviews.json`.
+6. **Plan Today:** `polaris_today` creates the daily session plan and updates `## Today's Dynamic Goal` in `ACTIVE_LEARNING.md`.
+
+
+
 ## learner
 
 **The Learner Method & Preferences:**

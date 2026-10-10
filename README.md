@@ -56,14 +56,14 @@ Sister project to [Aurora Slides MCP](https://github.com/DuongNAD/aurora-slides-
         └── 02-kien-truc.outline.md
 ```
 
-## Tools (v0.2.0)
+## Tools (v0.3.0)
 
-Polaris exposes 18 specialized MCP tools across 5 major functional domains:
+Polaris exposes 20 specialized MCP tools across 5 major functional domains:
 
 ### 1. Profile & Setup
 | Tool | Description |
 |---|---|
-| `polaris_guide` | Documentation on workflow, pipeline, quality gates, source policy, research engine, schedule, export, tracking, and learner method. |
+| `polaris_guide` | Documentation on workflow, pipeline, quality gates, source policy, research engine, schedule, export, tracking, progress sync, aurora workflow, and learner method. |
 | `polaris_profile` | Read (`get`) or update (`update`) learner preferences, weekly slots (`slots`), blackout dates (`blackouts`), and session recipes. |
 | `polaris_start` | Initialize `<subject>/polaris/` and save validated `brief.json` with measurable outcomes. |
 
@@ -94,9 +94,73 @@ Polaris exposes 18 specialized MCP tools across 5 major functional domains:
 | Tool | Description |
 |---|---|
 | `polaris_tasks_sync` | Sync scheduled lessons and module checkpoints into `<subject>/TASKS.md` under `## Polaris` in hub format (`- [ ] [Deadline: ...] [Priority: P2] ...`) with duplicate prevention. |
+| `polaris_progress_sync` | Read Aurora Slides interactive learning events from `progress.jsonl` (or exported files), map lessons to modules, add error log entries for wrong quizzes, predict gaps, and missed palace stations, and schedule spaced reviews (D+1, D+3, D+7, D+16, D+35) for completed lessons. Idempotent. |
 | `polaris_errorlog_add` | Record prediction errors and gaps into `polaris/errorlog.md` ("Sổ lỗi") and schedule spaced review iterations. |
 | `polaris_lesson_done` | Record lesson completion in `polaris/reviews.json` and schedule spaced reviews after 1, 3, 7, 16, and 35 days. |
 | `polaris_review_due` | Query lessons and error log items due for review on or before a given date, ordered oldest first. |
+| `polaris_today` | Generate a 60- or 30-minute session plan following learner session recipe (due reviews, next scheduled lesson with slide & outline paths, practice tier with DoD). Optionally write or replace `## Today's Dynamic Goal` in `<hub>/ACTIVE_LEARNING.md`. |
+
+## Polaris + Aurora
+
+Polaris and [Aurora Slides MCP](https://github.com/DuongNAD/aurora-slides-mcp) operate together as a closed-loop personalized learning ecosystem:
+
+```mermaid
+flowchart TD
+  subgraph Polaris_Planning ["1. Polaris: Planning & Scheduling"]
+    P1["Profile & Brief"] --> P2["Research Discovery & Fact Extraction"]
+    P2 --> P3["Roadmap & Quality Gates"]
+    P3 --> P4["Deterministic Slot Scheduling"]
+    P4 --> P5["Export: course.json & Lesson Outlines"]
+  end
+
+  subgraph Aurora_Learning ["2. Aurora Slides: Active Learning"]
+    A1["Author Decks with Fact Citations & Code"] --> A2["Interactive Preview Server"]
+    A2 --> A3["Learner: Quizzes, Predictions & Recall Walk"]
+    A3 --> A4["progress.jsonl Event Stream"]
+  end
+
+  subgraph Polaris_Loop ["3. Polaris: Closed-Loop Tracking"]
+    L1["polaris_progress_sync"] --> L2["Error Log ('Sổ lỗi')"]
+    L1 --> L3["Spaced Repetition (D+1, D+3, D+7, D+16, D+35)"]
+    L2 --> L4["polaris_today (Daily Session Plan & Goal)"]
+    L3 --> L4
+  end
+
+  P5 --> A1
+  A4 --> L1
+  L4 -.-> A2
+```
+
+### Side-by-Side Installation
+
+#### Claude Code CLI (`claude mcp add`)
+```bash
+claude mcp add polaris -- node D:/03_Development_Projects/ai_agents/polaris_mcp/dist/polaris.mjs
+claude mcp add aurora-slides -- node D:/03_Development_Projects/Slide_Projects/my_projects/aurora_slides_mcp/dist/aurora.mjs
+```
+
+#### Antigravity Configuration (`mcp_config.json`)
+```json
+{
+  "mcpServers": {
+    "polaris": {
+      "command": "node",
+      "args": ["D:/03_Development_Projects/ai_agents/polaris_mcp/dist/polaris.mjs"],
+      "env": {
+        "POLARIS_HUB": "D:/02_Learning_Knowledge",
+        "POLARIS_TOOLCHAIN": "C:/Users/Admin/AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Local/aurora-slides/toolchain"
+      }
+    },
+    "aurora-slides": {
+      "command": "node",
+      "args": ["D:/03_Development_Projects/Slide_Projects/my_projects/aurora_slides_mcp/dist/aurora.mjs"],
+      "env": {
+        "AURORA_TOOLCHAIN": "C:/Users/Admin/AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Local/aurora-slides/toolchain"
+      }
+    }
+  }
+}
+```
 
 ## Research Engine
 
@@ -144,16 +208,18 @@ Every result receives a transparent score (0-100) and evaluation reasons:
    - Formats tasks strictly: `- [ ] [Deadline: YYYY-MM-DD 23:59] [Priority: P2] Học bài <n>: <title>`.
    - Preserves line endings and prevents duplicates using `polaris/tasks-map.json`.
 
-4. **Spaced Review & Error Log ("Sổ lỗi"):**
-   - `polaris_lesson_done` schedules reviews at D+1, D+3, D+7, D+16, and D+35.
-   - `polaris_errorlog_add` records predict-vs-actual gaps into `polaris/errorlog.md` and tracks review intervals.
-   - `polaris_review_due` lists due reviews on demand for daily session planning.
+4. **Closed-Loop Progress & Spaced Repetition (`polaris_progress_sync`, `polaris_today`):**
+   - `polaris_progress_sync` reads `<course_dir>/progress.jsonl` from Aurora preview server or exported files.
+   - Ingests incorrect quiz answers, predict-run gaps, and missed memory palace stations into `polaris/errorlog.md` ("Sổ lỗi").
+   - Schedules spaced repetition reviews at D+1, D+3, D+7, D+16, and D+35 in `polaris/reviews.json`.
+   - `polaris_today` calculates 30m/60m session plans and writes `## Today's Dynamic Goal` to the hub's `ACTIVE_LEARNING.md`.
 
 ## Agent Prompts & Workflow
 
-Polaris provides 3 prompt workflows:
+Polaris provides 4 prompt workflows:
 - **`new_course`**: The full 8-step gated pipeline: Profile -> Brief & Diagnostic -> Research Shortlist -> Facts Extraction -> Roadmap Generation -> Schedule Planning -> Course & Outline Export -> Task Sync -> First Lesson Generation with Aurora.
-- **`next_lesson`**: Daily learning loop: Pick the next scheduled lesson -> Refresh outline -> Build presentation deck with Aurora tools adhering to accuracy and fact citations -> Audit slide deck -> Sync tasks -> Record review.
+- **`next_lesson`**: Daily learning loop: Sync progress -> Plan today's session -> Pick the next scheduled lesson -> Refresh outline -> Build presentation deck with Aurora tools adhering to accuracy and fact citations -> Audit slide deck -> Sync tasks -> Record review.
+- **`review`**: Active recall session: Ingest latest progress events -> Query due spaced reviews -> Guide 5-10 minute active recall session for error log items and lesson summaries.
 - **`research`**: Targeted deep-dive research hunt for a specific module across all keyless providers.
 
 ## MCP Server Connection
@@ -213,7 +279,13 @@ node dist/polaris.mjs export <subject_dir>
 # Sync scheduled lessons into <subject>/TASKS.md
 node dist/polaris.mjs tasks <subject_dir>
 
-# View guide topics (e.g. overview, pipeline, gates, sources, roadmap, research, schedule, export, tracking, learner, rules)
+# Sync Aurora progress events into error log and spaced reviews
+node dist/polaris.mjs progress <subject_dir> [course_dir]
+
+# Generate daily session plan and print Today's Dynamic Goal
+node dist/polaris.mjs today <subject_dir> [date]
+
+# View guide topics (e.g. overview, pipeline, gates, sources, roadmap, research, schedule, export, tracking, progress, aurora, learner, rules)
 node dist/polaris.mjs guide [topic]
 
 # Version & help
@@ -228,6 +300,14 @@ node dist/polaris.mjs help
 - **Facts:** Every fact references a valid source ID with a non-empty locator; numerical and date claims must have `crossCheck` sources or carry the `unverified` label.
 - **Roadmap:** Every brief outcome is covered; modules have `why`, ≥ 2 outputs, core points citing facts, ≥ 1 misconception with fix, materials fitting module hours, 3 practice tiers (`warmup`, `core`, `challenge`) with DoD, ≥ 4 self-check questions with predict questions when code is present, checkpoints, and no circular dependency cycles.
 - **Language:** Flags absolute overclaims ("100%", "luôn luôn", "tuyệt đối", "always", "every model").
+
+## Version History
+
+| Version | Description |
+|---|---|
+| **0.3.0** | Closed-loop integration with Aurora Slides: `polaris_progress_sync` (ingesting quiz, predict, recall, complete events into Sổ lỗi & spaced reviews), `polaris_today` (daily session planner & Active Learning Hub updater), `review` prompt, `progress` and `aurora` guide topics. |
+| **0.2.0** | Autonomous research discovery engine across 8 keyless providers (OpenAlex, arXiv, Semantic Scholar, CrossRef, Wikipedia, GitHub, YouTube, Brave), ranking with transparent evaluation reasons, 24h caching, Review Gate, and full-text capture tools. |
+| **0.1.0** | Initial release: Evidence-based study course creation, profile management, brief validation, fact extraction, 10-section ROADMAP rendering, deterministic scheduling, and Aurora course export. |
 
 ## Toolchain & Build
 
@@ -247,3 +327,4 @@ node scripts/e2e.mjs
 ## License
 
 MIT License - Copyright (c) 2026 DuongNAD.
+

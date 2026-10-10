@@ -56,14 +56,14 @@ Dự án song hành cùng [Aurora Slides MCP](https://github.com/DuongNAD/aurora
         └── 02-kien-truc.outline.md
 ```
 
-## Danh sách công cụ (v0.2.0)
+## Danh sách công cụ (v0.3.0)
 
-Polaris cung cấp 18 công cụ MCP chia theo 5 nhóm chức năng:
+Polaris cung cấp 20 công cụ MCP chia theo 5 nhóm chức năng:
 
 ### 1. Hồ sơ & Khởi tạo
 | Công cụ | Mô tả |
 |---|---|
-| `polaris_guide` | Tra cứu tài liệu hướng dẫn quy trình, rào chắn chất lượng, chính sách nguồn, công cụ nghiên cứu, lập lịch, xuất slide, theo dõi và phương pháp học. |
+| `polaris_guide` | Tra cứu tài liệu hướng dẫn quy trình, rào chắn chất lượng, chính sách nguồn, công cụ nghiên cứu, lập lịch, xuất slide, theo dõi, đồng bộ tiến độ Aurora, quy trình tích hợp và phương pháp học. |
 | `polaris_profile` | Đọc (`get`) hoặc cập nhật (`update`) hồ sơ người học, khung giờ tuần (`slots`), ngày bận (`blackouts`) và công thức buổi học. |
 | `polaris_start` | Khởi tạo thư mục môn học, thiết lập `polaris/brief.json` và cấu hình `.gitignore`. |
 
@@ -94,9 +94,73 @@ Polaris cung cấp 18 công cụ MCP chia theo 5 nhóm chức năng:
 | Công cụ | Mô tả |
 |---|---|
 | `polaris_tasks_sync` | Đồng bộ các bài học và checkpoint vào `<subject>/TASKS.md` dưới mục `## Polaris` theo định dạng chuẩn hub (`- [ ] [Deadline: ...] [Priority: P2] ...`) và chống trùng lặp. |
+| `polaris_progress_sync` | Đọc các sự kiện học tập tương tác từ file `progress.jsonl` của Aurora Slides (hoặc file xuất), tự động đưa lỗi quiz, lệch dự đoán (predict gaps) và trạm trí nhớ bị quên vào Sổ lỗi, đồng thời lập lịch ôn tập ngắt quãng (D+1, D+3, D+7, D+16, D+35) cho bài học hoàn thành. Hoàn toàn lũy đẳng (idempotent). |
 | `polaris_errorlog_add` | Ghi nhận lỗi dự đoán và khoảng cách hiểu vào `polaris/errorlog.md` ("Sổ lỗi") và lập lịch các mốc ôn tập. |
 | `polaris_lesson_done` | Đánh dấu hoàn thành bài học trong `polaris/reviews.json` và lập lịch ôn tập ngắt quãng sau 1, 3, 7, 16 và 35 ngày. |
 | `polaris_review_due` | Truy vấn danh sách bài học và mục sổ lỗi đến hạn ôn tập trước hoặc vào ngày chỉ định, sắp xếp cũ nhất lên trước. |
+| `polaris_today` | Lập kế hoạch buổi học 60 hoặc 30 phút theo công thức học tập (mục ôn tập đến hạn, bài học tiếp theo theo lịch kèm đường dẫn slide và outline, tầng thực hành kèm DoD). Tùy chọn ghi/thay thế khối `## Today's Dynamic Goal` vào file `ACTIVE_LEARNING.md` của Hub. |
+
+## Polaris + Aurora
+
+Polaris và [Aurora Slides MCP](https://github.com/DuongNAD/aurora-slides-mcp) phối hợp chặt chẽ tạo thành một vòng lặp học tập cá nhân hóa khép kín:
+
+```mermaid
+flowchart TD
+  subgraph Polaris_Planning ["1. Polaris: Lập kế hoạch & Lộ trình"]
+    P1["Hồ sơ người học & Brief"] --> P2["Khám phá nghiên cứu & Trích xuất Facts"]
+    P2 --> P3["Lộ trình ROADMAP.md & Rào chắn chất lượng"]
+    P3 --> P4["Lập lịch học xác định theo khung giờ"]
+    P4 --> P5["Xuất course.json & Dàn ý bài học"]
+  end
+
+  subgraph Aurora_Learning ["2. Aurora Slides: Học tập chủ động"]
+    A1["Dựng Slide dẫn chứng Facts & Code chuẩn"] --> A2["Trình chiếu tương tác qua Preview Server"]
+    A2 --> A3["Người học: Làm Quiz, Dự đoán code & Recall Walk"]
+    A3 --> A4["Luồng sự kiện progress.jsonl"]
+  end
+
+  subgraph Polaris_Loop ["3. Polaris: Vòng lặp theo dõi & Điều hướng"]
+    L1["polaris_progress_sync"] --> L2["Ghi nhận Sổ lỗi (Error Log)"]
+    L1 --> L3["Lịch ôn tập ngắt quãng (D+1..D+35)"]
+    L2 --> L4["polaris_today (Kế hoạch ngày & Dynamic Goal)"]
+    L3 --> L4
+  end
+
+  P5 --> A1
+  A4 --> L1
+  L4 -.-> A2
+```
+
+### Cài đặt hai máy chủ MCP song hành
+
+#### Qua Claude Code CLI (`claude mcp add`)
+```bash
+claude mcp add polaris -- node D:/03_Development_Projects/ai_agents/polaris_mcp/dist/polaris.mjs
+claude mcp add aurora-slides -- node D:/03_Development_Projects/Slide_Projects/my_projects/aurora_slides_mcp/dist/aurora.mjs
+```
+
+#### Qua cấu hình Antigravity (`mcp_config.json`)
+```json
+{
+  "mcpServers": {
+    "polaris": {
+      "command": "node",
+      "args": ["D:/03_Development_Projects/ai_agents/polaris_mcp/dist/polaris.mjs"],
+      "env": {
+        "POLARIS_HUB": "D:/02_Learning_Knowledge",
+        "POLARIS_TOOLCHAIN": "C:/Users/Admin/AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Local/aurora-slides/toolchain"
+      }
+    },
+    "aurora-slides": {
+      "command": "node",
+      "args": ["D:/03_Development_Projects/Slide_Projects/my_projects/aurora_slides_mcp/dist/aurora.mjs"],
+      "env": {
+        "AURORA_TOOLCHAIN": "C:/Users/Admin/AppData/Local/Packages/Claude_pzs8sxrjxfjjc/LocalCache/Local/aurora-slides/toolchain"
+      }
+    }
+  }
+}
+```
 
 ## Bộ máy nghiên cứu và tìm kiếm
 
@@ -144,16 +208,18 @@ Mỗi tài liệu được chấm điểm (0-100) kèm lý do rõ ràng:
    - Định dạng chuẩn: `- [ ] [Deadline: YYYY-MM-DD 23:59] [Priority: P2] Học bài <n>: <title>`.
    - Giữ nguyên định dạng xuống dòng và chống trùng lặp qua `polaris/tasks-map.json`.
 
-4. **Ôn tập ngắt quãng & Sổ lỗi:**
-   - `polaris_lesson_done` lập lịch ôn tập vào các ngày D+1, D+3, D+7, D+16 và D+35.
-   - `polaris_errorlog_add` ghi nhận khoảng cách giữa dự đoán và thực tế vào `polaris/errorlog.md` và theo dõi chu kỳ ôn tập.
-   - `polaris_review_due` hiển thị các bài học và lỗi cần ôn trong ngày.
+4. **Đồng bộ tiến độ & Ôn tập ngắt quãng (`polaris_progress_sync`, `polaris_today`):**
+   - `polaris_progress_sync` đọc file `progress.jsonl` do preview server của Aurora hoặc người học xuất ra.
+   - Tự động ghi các lỗi trắc nghiệm, lệch dự đoán code và trạm trí nhớ quên vào `polaris/errorlog.md` ("Sổ lỗi").
+   - Lập lịch ôn tập ngắt quãng D+1, D+3, D+7, D+16, D+35 trong `polaris/reviews.json`.
+   - `polaris_today` tính toán phiên học 30p/60p và cập nhật khối `## Today's Dynamic Goal` vào `ACTIVE_LEARNING.md` của Hub.
 
 ## Quy trình Prompts của Agent
 
-Polaris cung cấp 3 quy trình prompt mẫu:
+Polaris cung cấp 4 quy trình prompt mẫu:
 - **`new_course`**: Toàn bộ quy trình 8 bước có kiểm duyệt: Hồ sơ -> Brief & Chẩn đoán -> Nghiên cứu & Danh sách rút gọn -> Trích xuất Facts -> Xây dựng Lộ trình -> Lập Lịch trình -> Xuất Khóa học & Dàn ý -> Đồng bộ Tác vụ -> Dựng bài học đầu tiên với Aurora.
-- **`next_lesson`**: Vòng lặp học tập hàng ngày: Chọn bài học tiếp theo theo lịch -> Cập nhật dàn ý -> Dựng slide với Aurora tuân thủ trích dẫn facts -> Kiểm tra audit slide -> Đồng bộ tác vụ -> Ghi nhận kết quả ôn tập.
+- **`next_lesson`**: Vòng lặp học tập hàng ngày: Đồng bộ tiến độ -> Lập kế hoạch ngày -> Chọn bài học tiếp theo theo lịch -> Cập nhật dàn ý -> Dựng slide với Aurora tuân thủ trích dẫn facts -> Kiểm tra audit slide -> Đồng bộ tác vụ -> Ghi nhận kết quả ôn tập.
+- **`review`**: Phiên ôn tập gợi nhớ chủ động: Đồng bộ sự kiện tiến độ mới nhất -> Truy vấn các mục ôn tập đến hạn -> Hướng dẫn 5-10 phút ôn tập chủ động cho Sổ lỗi và trang vở tóm tắt.
 - **`research`**: Tìm kiếm tài liệu chuyên sâu cho một module cụ thể trên tất cả các provider không cần API key.
 
 ## Kết nối máy chủ MCP
@@ -213,7 +279,13 @@ node dist/polaris.mjs export <subject_dir>
 # Đồng bộ bài học vào <subject>/TASKS.md
 node dist/polaris.mjs tasks <subject_dir>
 
-# Xem tài liệu hướng dẫn (topics: overview, pipeline, gates, sources, roadmap, research, schedule, export, tracking, learner, rules)
+# Đồng bộ tiến độ học tập Aurora vào Sổ lỗi và lịch ôn tập
+node dist/polaris.mjs progress <subject_dir> [course_dir]
+
+# Lập kế hoạch buổi học hôm nay và in khối Today's Dynamic Goal
+node dist/polaris.mjs today <subject_dir> [date]
+
+# Xem tài liệu hướng dẫn (topics: overview, pipeline, gates, sources, roadmap, research, schedule, export, tracking, progress, aurora, learner, rules)
 node dist/polaris.mjs guide [topic]
 
 # Xem phiên bản & trợ giúp
@@ -228,6 +300,14 @@ node dist/polaris.mjs help
 - **Facts:** Mọi fact đều trỏ đến ID nguồn hợp lệ và có locator; số liệu và ngày tháng phải có `crossCheck` hoặc mang nhãn `unverified`.
 - **Roadmap:** Mọi outcome trong brief đều được bao phủ; các module có đầy đủ `why`, ≥ 2 `outputs`, `core` dẫn chứng facts, ≥ 1 `misconception` kèm fix, thời lượng tài liệu khớp thời gian module, 3 tầng thực hành (`warmup`, `core`, `challenge`) kèm DoD, ≥ 4 câu hỏi `selfCheck` (kèm câu hỏi `predict` khi có code), `checkpoint` rõ ràng, và không bị phụ thuộc vòng tròn.
 - **Language:** Phát hiện các khẳng định tuyệt đối quá đà ("100%", "luôn luôn", "tuyệt đối", "always", "every model").
+
+## Lịch sử phiên bản
+
+| Phiên bản | Mô tả |
+|---|---|
+| **0.3.0** | Tích hợp vòng lặp học tập khép kín cùng Aurora Slides: `polaris_progress_sync` (nạp sự kiện quiz, predict, recall, complete vào Sổ lỗi & lịch ôn tập), `polaris_today` (lập kế hoạch buổi học & cập nhật Active Learning Hub), prompt `review`, bổ sung chủ đề hướng dẫn `progress` và `aurora`. |
+| **0.2.0** | Tích hợp bộ máy nghiên cứu & tìm kiếm tự động qua 8 nhà cung cấp không cần API key (OpenAlex, arXiv, Semantic Scholar, CrossRef, Wikipedia, GitHub, YouTube, Brave), chấm điểm minh bạch kèm lý do đánh giá, bộ nhớ đệm 24h, cổng duyệt tài liệu (Review Gate) và công cụ trích xuất toàn văn. |
+| **0.1.0** | Bản phát hành đầu tiên: Xây dựng khóa học dựa trên bằng chứng, quản lý hồ sơ người học, kiểm thực brief, trích xuất fact, kết xuất ROADMAP chuẩn 10 mục tiếng Việt, lập lịch học xác định theo tuần và xuất khóa học cho Aurora Slides. |
 
 ## Toolchain & Build
 
@@ -247,3 +327,4 @@ node scripts/e2e.mjs
 ## Bản quyền
 
 MIT License - Copyright (c) 2026 DuongNAD.
+

@@ -44,6 +44,8 @@ import {
   getDueReviews,
   markLessonDone,
 } from "./tracking.js";
+import { syncProgress } from "./progress.js";
+import { getTodayPlan } from "./today.js";
 import { errMsg, subjectPaths, VERSION } from "./util.js";
 
 export * from "./schema.js";
@@ -57,6 +59,8 @@ export * from "./schedule.js";
 export * from "./export.js";
 export * from "./tasks.js";
 export * from "./tracking.js";
+export * from "./progress.js";
+export * from "./today.js";
 export * from "./util.js";
 
 type Content = { type: "text"; text: string };
@@ -78,7 +82,7 @@ async function safe(fn: () => Promise<ToolResult>): Promise<ToolResult> {
 const INSTRUCTIONS = `Polaris MCP builds evidence-based personal study courses for self-learners from brief to Aurora Slides course.
 
 Workflow:
-1. polaris_guide (topics: "overview", "pipeline", "gates", "sources", "roadmap", "research", "schedule", "export", "tracking", "learner", "rules").
+1. polaris_guide (topics: "overview", "pipeline", "gates", "sources", "roadmap", "research", "schedule", "export", "tracking", "progress", "aurora", "learner", "rules").
 2. polaris_profile { action: "get" } to read learner methods, slots, and blackouts.
 3. polaris_start { subject_dir, brief } to initialize subject brief and polaris folder.
 4. Research & Discovery:
@@ -93,9 +97,11 @@ Workflow:
 9. polaris_export_course { subject_dir, course_dir? } to write Aurora course.json and lesson outline skeletons in polaris/lessons/<dir>.outline.md.
 10. polaris_tasks_sync { subject_dir } to append scheduled lesson and checkpoint tasks to TASKS.md under ## Polaris.
 11. Tracking & Spaced Repetition:
+    - polaris_progress_sync { subject_dir, course_dir?, file? } to ingest Aurora progress events into Sổ lỗi and schedule spaced reviews.
     - polaris_errorlog_add { subject_dir, entry } to log runtime prediction gaps in polaris/errorlog.md and schedule D+1, D+3, D+7, D+16, D+35 reviews.
     - polaris_lesson_done { subject_dir, lesson_dir, score? } to record completion and schedule spaced reviews.
     - polaris_review_due { subject_dir, date? } to query due reviews.
+    - polaris_today { subject_dir, date?, minutes?, write? } to generate 60m/30m session plan & dynamic goal for the learning hub.
 
 Rules:
 - Evidence first: every factual bullet points to facts; every fact points to a source + locator (page [p. N], timestamp [mm:ss], section, lines).
@@ -682,6 +688,51 @@ async function startMcp(): Promise<void> {
       }),
   );
 
+  /* 19. polaris_progress_sync */
+  server.registerTool(
+    "polaris_progress_sync",
+    {
+      title: "Sync Aurora Slides learning progress",
+      description:
+        "Read Aurora Slides interactive learning events from `<course_dir>/progress.jsonl` or exported file, map lessons to modules, add error log entries for wrong quizzes, predict gaps, and missed palace stations, and schedule spaced reviews (D+1, D+3, D+7, D+16, D+35) for completed lessons. Idempotent.",
+      inputSchema: {
+        subject_dir: z.string().min(1).describe("Subject directory path"),
+        course_dir: z.string().optional().describe("Target Aurora course directory (defaults to course-map.json or <subject>/05_Slides/<slug>)"),
+        file: z.string().optional().describe("Explicit progress JSONL file path (e.g. aurora-progress-<slug>.jsonl)"),
+        hub: z.string().optional().describe("Learning hub root directory"),
+      },
+      annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ subject_dir, course_dir, file, hub }) =>
+      safe(async () => {
+        const res = await syncProgress({ subject_dir, course_dir, file, hub });
+        return text(res.summary);
+      }),
+  );
+
+  /* 20. polaris_today */
+  server.registerTool(
+    "polaris_today",
+    {
+      title: "Generate daily session plan and dynamic goal",
+      description:
+        "Generate a 60- or 30-minute session plan following learner session recipe: due spaced reviews, next uncompleted lesson from schedule with Aurora slide & outline paths, and practice tier with Definition of Done (DoD). When write: true, updates or inserts ## Today's Dynamic Goal block in <hub>/ACTIVE_LEARNING.md.",
+      inputSchema: {
+        subject_dir: z.string().min(1).describe("Subject directory path"),
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD").optional().describe("Session date (defaults to today)"),
+        minutes: z.number().int().min(15).max(180).optional().describe("Session minutes (30 or 60; defaults to schedule or profile slot)"),
+        write: z.boolean().default(false).optional().describe("Write or replace ## Today's Dynamic Goal in ACTIVE_LEARNING.md (default false)"),
+        hub: z.string().optional().describe("Learning hub root directory"),
+      },
+      annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ subject_dir, date, minutes, write, hub }) =>
+      safe(async () => {
+        const res = await getTodayPlan({ subject_dir, date, minutes, write, hub });
+        return text(res.summary);
+      }),
+  );
+
   /* ───────── Prompts ───────── */
 
   server.registerPrompt(
@@ -764,8 +815,8 @@ async function startMcp(): Promise<void> {
   server.registerPrompt(
     "next_lesson",
     {
-      title: "Build the next scheduled lesson deck",
-      description: "Pick the next scheduled lesson, refresh outline, build slide deck with Aurora, audit, and sync tasks",
+      title: "Build and study the next scheduled lesson deck",
+      description: "Sync progress, plan today's session, pick the next scheduled lesson, refresh outline, build slide deck with Aurora, audit, and sync tasks",
       argsSchema: {
         subject_dir: z.string().describe("Subject directory path"),
         lesson_dir: z.string().optional().describe("Specific lesson folder e.g. '01-vong-lap-agent' (defaults to next due)"),
@@ -780,13 +831,46 @@ async function startMcp(): Promise<void> {
             text: [
               `Build and verify the next lesson deck for course at ${subject_dir}${lesson_dir ? ` (target: ${lesson_dir})` : ""}.`,
               "",
-              "1. Check polaris_review_due to see if any spaced review or error log review is due before starting new material.",
-              "2. Inspect polaris/course-map.json and polaris/lessons/ to find the target lesson outline skeleton.",
-              "3. Follow the lesson outline skeleton: Title, Theory, Anchors (Memory palace & visual anchors), Notebook page (4-8 lines), Predict-then-run practice (easy -> hard), Quiz (with distractors from misconceptions), Recall walk, and Summary.",
-              "4. Build the deck in <course_dir>/<lesson_dir>/deck.json using Aurora Slides tools, strictly adhering to Aurora accuracy rules and citing facts in `source`.",
-              "5. Run aurora_audit to verify slide length, typography, and contrast.",
-              "6. Run polaris_tasks_sync to keep tasks synchronized.",
-              "7. When the learner finishes studying the deck, call polaris_lesson_done to schedule retention reviews.",
+              "1. Run polaris_progress_sync to ingest recent Aurora progress events, update Sổ lỗi, and schedule spaced reviews.",
+              "2. Run polaris_today to get today's session plan (due reviews, next lesson, practice tier, and Definition of Done).",
+              "3. Inspect polaris/course-map.json and polaris/lessons/ to find the target lesson outline skeleton.",
+              "4. Follow the lesson outline skeleton: Title, Theory, Anchors (Memory palace & visual anchors), Notebook page (4-8 lines), Predict-then-run practice (easy -> hard), Quiz (with distractors from misconceptions), Recall walk, and Summary.",
+              "5. Build the deck in <course_dir>/<lesson_dir>/deck.json using Aurora Slides tools, strictly adhering to Aurora accuracy rules and citing facts in `source`.",
+              "6. Run aurora_audit to verify slide length, typography, and contrast.",
+              "7. Run polaris_tasks_sync to keep tasks synchronized.",
+              "8. When the learner finishes studying the deck, call polaris_progress_sync or polaris_lesson_done to schedule retention reviews.",
+            ].join("\n"),
+          },
+        },
+      ],
+    }),
+  );
+
+  server.registerPrompt(
+    "review",
+    {
+      title: "Spaced review and active recall session",
+      description: "Run progress sync, list due reviews, and guide an active recall session for error log items and completed lessons",
+      argsSchema: {
+        subject_dir: z.string().describe("Subject directory path"),
+        date: z.string().optional().describe("Target review date (default today)"),
+      },
+    },
+    ({ subject_dir, date }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: [
+              `Conduct an active spaced repetition review session for course at ${subject_dir}${date ? ` on date ${date}` : ""}.`,
+              "",
+              "1. Run polaris_progress_sync to ensure all latest Aurora interactive learning events are synchronized.",
+              "2. Run polaris_review_due to list all lessons and error log entries due today.",
+              "3. Guide a 5-10 minute active recall session with the learner:",
+              "   - For Sổ lỗi (error log) entries: Present the symptom and initial prediction without showing the fix; ask the learner to explain the root cause and the rule learned.",
+              "   - For Lesson reviews: Walk through the memory palace stations, review the 4-8 line notebook summary, and ask 2-3 retrieval questions.",
+              "4. If any errors or prediction gaps occur during review, record them using polaris_errorlog_add.",
             ].join("\n"),
           },
         },
@@ -811,6 +895,8 @@ Usage: node polaris.mjs [command] [options]
   schedule <subject_dir>        generate schedule and update ROADMAP.md weekly table
   export <subject_dir>          export Aurora course.json and lesson outlines
   tasks <subject_dir>           sync tasks to <subject_dir>/TASKS.md
+  progress <subject_dir> [dir]  sync Aurora progress.jsonl events to Sổ lỗi & reviews
+  today <subject_dir> [date]    print daily session plan & Today's Dynamic Goal
   guide [topic]                 view guide documentation
   version | --version           print version
   help | --help                 print this help`;
@@ -835,6 +921,28 @@ async function cli(args: string[]): Promise<number> {
     case "guide":
       console.log(await guideText(target));
       return 0;
+
+    case "progress": {
+      if (!target) {
+        console.error("Usage: polaris progress <subject_dir> [course_dir]");
+        return 1;
+      }
+      const dir = resolve(target);
+      const res = await syncProgress({ subject_dir: dir, course_dir: args[2] });
+      console.log(res.summary);
+      return 0;
+    }
+
+    case "today": {
+      if (!target) {
+        console.error("Usage: polaris today <subject_dir> [date]");
+        return 1;
+      }
+      const dir = resolve(target);
+      const res = await getTodayPlan({ subject_dir: dir, date: args[2] });
+      console.log(res.summary);
+      return 0;
+    }
 
     case "check": {
       if (!target) {

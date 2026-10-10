@@ -6,9 +6,9 @@ import { homedir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.3.0";
 export const PKG_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-export const UA = `Polaris/0.2 (personal study course builder; https://github.com/DuongNAD) Node.js/${process.versions.node}`;
+export const UA = `Polaris/0.3 (personal study course builder; https://github.com/DuongNAD) Node.js/${process.versions.node}`;
 
 export function hubDir(): string {
   return resolve(process.env.POLARIS_HUB ?? "D:/02_Learning_Knowledge");
@@ -31,6 +31,7 @@ export interface SubjectPaths {
   tasksMapJson: string;
   reviewsJson: string;
   errorlogMd: string;
+  progressStateJson: string;
   capturesDir: string;
   researchDir: string;
   lessonsDir: string;
@@ -61,6 +62,7 @@ export function subjectPaths(target: string): SubjectPaths {
     tasksMapJson: join(polarisDir, "tasks-map.json"),
     reviewsJson: join(polarisDir, "reviews.json"),
     errorlogMd: join(polarisDir, "errorlog.md"),
+    progressStateJson: join(polarisDir, "progress-state.json"),
     capturesDir: join(polarisDir, "captures"),
     researchDir: join(polarisDir, "research"),
     lessonsDir: join(polarisDir, "lessons"),

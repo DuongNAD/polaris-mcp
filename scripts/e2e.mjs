@@ -173,22 +173,27 @@ try {
   const { tools } = await client.listTools();
   const toolNames = tools.map((t) => t.name).sort();
   ok(
-    "18 tools registered",
-    toolNames.length === 18 &&
+    "20 tools registered",
+    toolNames.length === 20 &&
       toolNames.includes("polaris_schedule") &&
       toolNames.includes("polaris_export_course") &&
       toolNames.includes("polaris_tasks_sync") &&
       toolNames.includes("polaris_errorlog_add") &&
       toolNames.includes("polaris_lesson_done") &&
-      toolNames.includes("polaris_review_due"),
+      toolNames.includes("polaris_review_due") &&
+      toolNames.includes("polaris_progress_sync") &&
+      toolNames.includes("polaris_today"),
     toolNames.join(", "),
   );
 
   const { prompts } = await client.listPrompts();
   const promptNames = prompts.map((p) => p.name).sort();
   ok(
-    "prompts listed (new_course, research, next_lesson)",
-    promptNames.includes("new_course") && promptNames.includes("research") && promptNames.includes("next_lesson"),
+    "prompts listed (new_course, research, next_lesson, review)",
+    promptNames.includes("new_course") &&
+      promptNames.includes("research") &&
+      promptNames.includes("next_lesson") &&
+      promptNames.includes("review"),
     promptNames.join(", "),
   );
 
@@ -200,7 +205,7 @@ try {
     "utf8",
   );
 
-  // 3.1 polaris_guide (all topics including schedule, export, tracking)
+  // 3.1 polaris_guide (all topics including schedule, export, tracking, progress, aurora)
   let r = await call("polaris_guide");
   ok("guide overview", !r.isError && textOf(r).includes("Available guide topics"), textOf(r).split("\n")[0]);
   r = await call("polaris_guide", { topic: "schedule" });
@@ -209,6 +214,10 @@ try {
   ok("guide export topic", !r.isError && textOf(r).includes("course.json"));
   r = await call("polaris_guide", { topic: "tracking" });
   ok("guide tracking topic", !r.isError && textOf(r).includes("Sổ lỗi (Error Log):"));
+  r = await call("polaris_guide", { topic: "progress" });
+  ok("guide progress topic", !r.isError && textOf(r).includes("Event Contract:"));
+  r = await call("polaris_guide", { topic: "aurora" });
+  ok("guide aurora topic", !r.isError && textOf(r).includes("Polaris and Aurora Slides form a closed-loop"));
 
   // 3.2 polaris_profile (with slots & blackouts)
   r = await call("polaris_profile", { action: "get", hub: TEST_DIR });
@@ -665,9 +674,207 @@ try {
   ok("review_due succeeds", !r.isError && textOf(r).includes("Danh sách ôn tập đến hạn tại ngày 2026-10-16: 2 mục"));
   ok("review_due returns items with D+1 offset", textOf(r).includes("[D+1]") && textOf(r).includes("[Bài học]") && textOf(r).includes("[Sổ lỗi]"));
 
-  // 3.20 CLI tests
+  // 3.20 polaris_progress_sync with fixture progress.jsonl
+  const progressFixtureLines = [
+    JSON.stringify({
+      v: 1,
+      t: "2026-10-15T14:30:00+07:00",
+      course: "AI Agents 101",
+      lesson: "01-agent-va-vong-lap-react-a",
+      deck: "Agent và Vòng lặp ReAct",
+      slide: 3,
+      slideId: "s_quiz_1",
+      type: "quiz",
+      question: "ReAct agent khác gì so với Chain-of-Thought tiêu chuẩn?",
+      chosen: [1],
+      answer: [2],
+      correct: false,
+    }),
+    JSON.stringify({
+      v: 1,
+      t: "2026-10-15T14:35:00+07:00",
+      course: "AI Agents 101",
+      lesson: "01-agent-va-vong-lap-react-a",
+      deck: "Agent và Vòng lặp ReAct",
+      slide: 6,
+      slideId: "s_pred_1",
+      type: "predict",
+      title: "Dự đoán output khi tool trả về mã lỗi 404",
+      prediction: "Agent sẽ crash ngay lập tức",
+      rating: "different",
+      output: "Agent bắt exception, sinh Thought mới và đổi query tìm kiếm.",
+    }),
+    JSON.stringify({
+      v: 1,
+      t: "2026-10-15T14:40:00+07:00",
+      course: "AI Agents 101",
+      lesson: "01-agent-va-vong-lap-react-a",
+      deck: "Agent và Vòng lặp ReAct",
+      slide: 8,
+      slideId: "s_recall_1",
+      type: "recall",
+      palace: "Phòng làm việc",
+      station: 2,
+      place: "Bàn làm việc",
+      item: "Vòng lặp ReAct Think-Act-Observe",
+      rating: "missed",
+    }),
+    JSON.stringify({
+      v: 1,
+      t: "2026-10-15T14:45:00+07:00",
+      course: "AI Agents 101",
+      lesson: "01-agent-va-vong-lap-react-a",
+      deck: "Agent và Vòng lặp ReAct",
+      slide: 12,
+      slideId: "s_comp_1",
+      type: "complete",
+      slides: 12,
+      quiz: "3/4",
+      predictions: "2/3",
+    }),
+    "{ invalid json line that should be skipped",
+    JSON.stringify({
+      v: 1,
+      t: "2026-10-15T14:50:00+07:00",
+      lesson: "01-agent-va-vong-lap-react-a",
+      slide: 1,
+      type: "custom_unknown_type",
+    }),
+  ];
+
+  const courseProgressFile = join(courseDir, "progress.jsonl");
+  writeFileSync(courseProgressFile, progressFixtureLines.join("\n") + "\n", "utf8");
+
+  r = await call("polaris_progress_sync", {
+    subject_dir: SUBJECT_DIR,
+    hub: TEST_DIR,
+  });
+  ok("progress_sync succeeds with fixture", !r.isError && textOf(r).includes("Đồng bộ tiến độ Aurora hoàn tất"));
+  ok(
+    "progress_sync adds 3 error-log entries, 1 completion, and reports 2 skipped lines",
+    textOf(r).includes("Mục mới thêm vào Sổ lỗi: 3") &&
+      textOf(r).includes("Bài học hoàn thành mới: 1") &&
+      textOf(r).includes("Bỏ qua 2 dòng (1 lỗi định dạng, 1 sự kiện không xác định)"),
+  );
+
+  const updatedErrorlogContent = readFileSync(errorlogMdPath, "utf8");
+  ok(
+    "errorlog.md contains 3 new error entries with correct details",
+    updatedErrorlogContent.includes("ReAct agent khác gì so với Chain-of-Thought tiêu chuẩn?") &&
+      updatedErrorlogContent.includes("Dự đoán output khi tool trả về mã lỗi 404") &&
+      updatedErrorlogContent.includes("Bàn làm việc"),
+  );
+
+  // Idempotency: second sync adds nothing
+  const rSync2 = await call("polaris_progress_sync", {
+    subject_dir: SUBJECT_DIR,
+    hub: TEST_DIR,
+  });
+  ok(
+    "running progress_sync twice adds nothing (idempotent)",
+    !rSync2.isError &&
+      textOf(rSync2).includes("0 sự kiện mới") &&
+      textOf(rSync2).includes("Mục mới thêm vào Sổ lỗi: 0") &&
+      textOf(rSync2).includes("Bài học hoàn thành mới: 0"),
+  );
+
+  // Exported file merge test
+  const exportedProgressFile = join(TEST_DIR, "aurora-progress-ai-agents-101.jsonl");
+  const exportedLines = [
+    ...progressFixtureLines.slice(0, 4), // Duplicates of previous events
+    JSON.stringify({
+      v: 1,
+      t: "2026-10-15T15:00:00+07:00",
+      course: "AI Agents 101",
+      lesson: "01-agent-va-vong-lap-react-a",
+      deck: "Agent và Vòng lặp ReAct",
+      slide: 10,
+      slideId: "s_quiz_2",
+      type: "quiz",
+      question: "Tại sao cần max_steps trong vòng lặp ReAct?",
+      chosen: [0],
+      answer: [3],
+      correct: false,
+    }),
+  ];
+  writeFileSync(exportedProgressFile, exportedLines.join("\n") + "\n", "utf8");
+
+  const rSyncExport = await call("polaris_progress_sync", {
+    subject_dir: SUBJECT_DIR,
+    file: exportedProgressFile,
+    hub: TEST_DIR,
+  });
+  ok(
+    "exported file merges with course file without duplicates",
+    !rSyncExport.isError &&
+      textOf(rSyncExport).includes("Mục mới thêm vào Sổ lỗi: 1") &&
+      textOf(rSyncExport).includes("Tại sao cần max_steps trong vòng lặp ReAct?"),
+  );
+
+  // 3.21 polaris_today
+  r = await call("polaris_today", {
+    subject_dir: SUBJECT_DIR,
+    date: "2026-10-16",
+    hub: TEST_DIR,
+  });
+  ok("polaris_today succeeds", !r.isError && textOf(r).includes("Kế hoạch phiên học"));
+  ok(
+    "polaris_today returns due reviews, next lesson, and Today's Dynamic Goal",
+    textOf(r).includes("Mục ôn tập đến hạn") &&
+      textOf(r).includes("02-agent-va-vong-lap-react-b") &&
+      textOf(r).includes("## Today's Dynamic Goal") &&
+      textOf(r).includes("- Date: 2026-10-16") &&
+      textOf(r).includes("- Subject: AI Agents 101") &&
+      textOf(r).includes("- Target:") &&
+      textOf(r).includes("- Definition of Done (DoD):") &&
+      textOf(r).includes("- Status: In Progress"),
+  );
+
+  // polaris_today with write: true inserts block into fixture ACTIVE_LEARNING.md
+  const hubActiveLearning = join(TEST_DIR, "ACTIVE_LEARNING.md");
+  const originalHubContent = readFileSync(hubActiveLearning, "utf8");
+  r = await call("polaris_today", {
+    subject_dir: SUBJECT_DIR,
+    date: "2026-10-16",
+    write: true,
+    hub: TEST_DIR,
+  });
+  ok("polaris_today write: true succeeds", !r.isError && textOf(r).includes("Đã cập nhật mục tiêu"));
+
+  const hubAfterWrite1 = readFileSync(hubActiveLearning, "utf8");
+  ok(
+    "polaris_today write: true inserts ## Today's Dynamic Goal into ACTIVE_LEARNING.md",
+    hubAfterWrite1.includes("## Today's Dynamic Goal") &&
+      hubAfterWrite1.includes("- Date: 2026-10-16") &&
+      hubAfterWrite1.includes("GCI HW3 submission deadline"), // preserved other lines
+  );
+
+  // Second write with different date replaces the block (other lines untouched)
+  r = await call("polaris_today", {
+    subject_dir: SUBJECT_DIR,
+    date: "2026-10-17",
+    write: true,
+    hub: TEST_DIR,
+  });
+  const hubAfterWrite2 = readFileSync(hubActiveLearning, "utf8");
+  const countGoalHeadings = (hubAfterWrite2.match(/## Today's Dynamic Goal/g) || []).length;
+  ok(
+    "second polaris_today write replaces existing goal block without duplicate headings",
+    countGoalHeadings === 1 &&
+      hubAfterWrite2.includes("- Date: 2026-10-17") &&
+      !hubAfterWrite2.includes("- Date: 2026-10-16") &&
+      hubAfterWrite2.includes("GCI HW3 submission deadline"),
+  );
+
+  // 3.22 CLI tests
   const guideCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "guide", "schedule"], { encoding: "utf8" });
   ok("CLI guide schedule", guideCli.includes("Topological Sorting:"));
+
+  const guideProgressCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "guide", "progress"], { encoding: "utf8" });
+  ok("CLI guide progress", guideProgressCli.includes("Event Contract:"));
+
+  const guideAuroraCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "guide", "aurora"], { encoding: "utf8" });
+  ok("CLI guide aurora", guideAuroraCli.includes("Polaris and Aurora Slides form a closed-loop"));
 
   const checkCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "check", SUBJECT_DIR], { encoding: "utf8" });
   ok("CLI check subject", checkCli.includes("Quality Gate Audit"));
@@ -684,11 +891,17 @@ try {
   const tasksCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "tasks", SUBJECT_DIR], { encoding: "utf8" });
   ok("CLI tasks", tasksCli.includes("Tasks sync complete"));
 
+  const progressCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "progress", SUBJECT_DIR], { encoding: "utf8" });
+  ok("CLI progress", progressCli.includes("Đồng bộ tiến độ Aurora"));
+
+  const todayCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "today", SUBJECT_DIR], { encoding: "utf8" });
+  ok("CLI today", todayCli.includes("Kế hoạch phiên học") && todayCli.includes("## Today's Dynamic Goal"));
+
   const versionCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "version"], { encoding: "utf8" });
-  ok("CLI version 0.2.0", versionCli.trim() === "0.2.0");
+  ok("CLI version 0.3.0", versionCli.trim() === "0.3.0");
 
   const helpCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "help"], { encoding: "utf8" });
-  ok("CLI help", helpCli.includes("Usage: node polaris.mjs"));
+  ok("CLI help", helpCli.includes("Usage: node polaris.mjs") && helpCli.includes("progress <subject_dir>") && helpCli.includes("today <subject_dir>"));
 
   /* ───────── 4. Live Network Provider Checks ───────── */
 
