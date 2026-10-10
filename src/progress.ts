@@ -12,6 +12,9 @@ import {
 import { readBrief, readRoadmap } from "./store.js";
 import {
   addErrorLogEntry,
+  addPredictErrorLogEntry,
+  addQuizErrorLogEntry,
+  addRecallErrorLogEntry,
   getDueReviews,
   markLessonDone,
 } from "./tracking.js";
@@ -245,24 +248,20 @@ export async function syncProgress(options: ProgressSyncOptions): Promise<Progre
           const dedupKey = `${event.lesson}::${event.slide}::quiz::${event.question}`;
           if (!dedupKeys.has(dedupKey)) {
             dedupKeys.add(dedupKey);
-            const errRes = await addErrorLogEntry(
+            const errRes = await addQuizErrorLogEntry(
               subject_dir,
-              {
-                date: eventDate,
-                module: modId,
-                lesson: event.lesson,
-                prediction: `Đã chọn: [${event.chosen.join(", ")}]`,
-                result: `Đáp án đúng: [${event.answer.join(", ")}] (Trắc nghiệm sai tại slide ${event.slide})`,
-                why: `Trắc nghiệm: ${event.question}`,
-                fix: `Xem lại lý thuyết và phân biệt phương án đúng [${event.answer.join(", ")}] với phương án đã chọn [${event.chosen.join(", ")}]`,
-                source: event.deck || event.lesson,
-              },
+              event,
+              modId,
               options.hub,
             );
+            const answerDisplay =
+              event.answerText && event.answerText.length > 0
+                ? event.answerText.join(", ")
+                : `[${event.answer.join(", ")}]`;
             newErrorLogEntries.push({
               id: errRes.entryId,
-              why: `Trắc nghiệm: ${event.question}`,
-              fix: `Đáp án đúng: [${event.answer.join(", ")}]`,
+              why: `Câu hỏi: ${event.question}`,
+              fix: `Đáp án đúng: ${answerDisplay}`,
             });
           }
         }
@@ -275,24 +274,16 @@ export async function syncProgress(options: ProgressSyncOptions): Promise<Progre
           const dedupKey = `${event.lesson}::${event.slide}::predict::${event.title}`;
           if (!dedupKeys.has(dedupKey)) {
             dedupKeys.add(dedupKey);
-            const errRes = await addErrorLogEntry(
+            const errRes = await addPredictErrorLogEntry(
               subject_dir,
-              {
-                date: eventDate,
-                module: modId,
-                lesson: event.lesson,
-                prediction: event.prediction || "Chưa ghi dự đoán",
-                result: event.output || "Lệch kết quả thực thi",
-                why: `Lệch dự đoán (predict gap) tại slide ${event.slide}: ${event.title}`,
-                fix: `Cập nhật mental model theo output thực tế: ${event.output ? event.output.slice(0, 150) : event.title}`,
-                source: event.deck || event.lesson,
-              },
+              event,
+              modId,
               options.hub,
             );
             newErrorLogEntries.push({
               id: errRes.entryId,
               why: `Lệch dự đoán slide ${event.slide}: ${event.title}`,
-              fix: `Cập nhật mental model theo output thực tế`,
+              fix: `Kết quả thật: ${event.output ? event.output.slice(0, 100) : event.title}`,
             });
           }
         }
@@ -312,24 +303,16 @@ export async function syncProgress(options: ProgressSyncOptions): Promise<Progre
           const dedupKey = `${event.lesson}::${event.slide}::recall::${event.palace}_${event.station}_${event.place}_${event.item}`;
           if (!dedupKeys.has(dedupKey)) {
             dedupKeys.add(dedupKey);
-            const errRes = await addErrorLogEntry(
+            const errRes = await addRecallErrorLogEntry(
               subject_dir,
-              {
-                date: eventDate,
-                module: modId,
-                lesson: event.lesson,
-                prediction: `Quên mục tại trạm ${event.station} (${event.place})`,
-                result: `Mục cần nhớ: ${event.item}`,
-                why: `Quên vị trí Cung điện trí nhớ: Trạm ${event.station} (${event.place}) -> ${event.item} (Palace: ${event.palace})`,
-                fix: `Tái lập liên kết hình ảnh trực quan: ${event.place} gắn liền với ${event.item}`,
-                source: `Cung điện trí nhớ: ${event.palace}`,
-              },
+              event,
+              modId,
               options.hub,
             );
             newErrorLogEntries.push({
               id: errRes.entryId,
               why: `Quên trạm ${event.station} (${event.place}) -> ${event.item}`,
-              fix: `Neo hình ảnh: ${event.place} -> ${event.item}`,
+              fix: `Neo: ${event.place} -> ${event.item}`,
             });
           }
         }

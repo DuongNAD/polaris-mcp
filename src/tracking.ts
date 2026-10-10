@@ -5,6 +5,9 @@ import {
   ErrorLogEntryInputSchema,
   validateReviewsData,
   type ErrorLogEntryInput,
+  type PredictProgressEvent,
+  type QuizProgressEvent,
+  type RecallProgressEvent,
   type ReviewItem,
   type ReviewStep,
   type ReviewsData,
@@ -32,6 +35,243 @@ export interface ErrorLogAddResult {
   dueDateD16: string;
   dueDateD35: string;
   summary: string;
+}
+
+export async function appendErrorLogChunk(errorlogPath: string, chunk: string): Promise<void> {
+  let existingErrorLog = "";
+  if (existsSync(errorlogPath)) {
+    existingErrorLog = await readFile(errorlogPath, "utf8");
+  } else {
+    existingErrorLog =
+      "# Sổ lỗi (Error Log & Predict Gaps)\n\n> Ghi nhận các điểm lệch giữa dự đoán (predict) và thực tế (run). Mỗi lỗi là một cơ hội củng cố mental model.\n\n";
+  }
+  const updatedErrorLog = existingErrorLog.trimEnd() + "\n\n" + chunk;
+  await atomicWriteFile(errorlogPath, updatedErrorLog);
+}
+
+export async function addQuizErrorLogEntry(
+  subjectDir: string,
+  event: QuizProgressEvent,
+  modId?: string,
+  hub?: string,
+): Promise<{ entryId: string; summary: string }> {
+  const p = subjectPaths(subjectDir);
+  const date = event.t.slice(0, 10);
+  const profile = await getProfile(hub);
+  const reviewOffsets = profile.method?.spacedReviewDays ?? [1, 3, 7, 16, 35];
+
+  const d1 = addDays(date, reviewOffsets[0] ?? 1);
+  const d3 = addDays(date, reviewOffsets[1] ?? 3);
+  const d7 = addDays(date, reviewOffsets[2] ?? 7);
+  const d16 = addDays(date, reviewOffsets[3] ?? 16);
+  const d35 = addDays(date, reviewOffsets[4] ?? 35);
+
+  const modStr = modId ? ` - Module ${modId}` : "";
+  const lesStr = event.lesson ? ` (${event.lesson})` : "";
+  const entryId = `ERR_${date}_${hash(`quiz_${event.lesson}_${event.slide}_${event.question}`, 6)}`;
+
+  const chosenDisplay =
+    event.chosenText && event.chosenText.length > 0
+      ? event.chosenText.join(", ")
+      : `[${event.chosen.join(", ")}]`;
+
+  const answerDisplay =
+    event.answerText && event.answerText.length > 0
+      ? event.answerText.join(", ")
+      : `[${event.answer.join(", ")}]`;
+
+  const lines = [
+    `### [${date}] Trắc nghiệm sai${modStr}${lesStr}`,
+    `- **Mã mục:** \`${entryId}\``,
+    `- **Ngày ghi nhận:** ${date}`,
+    `- **Câu hỏi:** ${event.question}`,
+    `- **Đã chọn:** ${chosenDisplay}`,
+    `- **Đáp án đúng:** ${answerDisplay}`,
+  ];
+
+  if (event.explanation && event.explanation.trim()) {
+    lines.push(`- **Giải thích:** ${event.explanation.trim()}`);
+  }
+
+  lines.push(
+    `- **Nguyên nhân gốc rễ:** (tự điền khi ôn: vì sao chọn sai?)`,
+    `- **Nguồn / Tham chiếu:** ${event.deck || event.lesson || "Thực hành bài học"}`,
+    `- **Lịch ôn lại giãn cách:** D+1 (${d1}), D+3 (${d3}), D+7 (${d7}), D+16 (${d16}), D+35 (${d35})`,
+    "",
+  );
+
+  const mdChunk = lines.join("\n");
+  await appendErrorLogChunk(p.errorlogMd, mdChunk);
+
+  // Schedule reviews in polaris/reviews.json
+  const reviewsData = await loadOrCreateReviewsData(p.reviewsJson);
+  const steps: ReviewStep[] = reviewOffsets.map((offset) => ({
+    dayOffset: offset,
+    dueDate: addDays(date, offset),
+    done: false,
+  }));
+
+  const reviewItem: ReviewItem = {
+    id: entryId,
+    type: "error",
+    title: `Trắc nghiệm: ${event.question.slice(0, 60)}`,
+    module: modId,
+    lessonDir: event.lesson,
+    createdDate: date,
+    steps,
+    details: {
+      kind: "quiz",
+      question: event.question,
+      chosen: event.chosen,
+      chosenText: event.chosenText,
+      answer: event.answer,
+      answerText: event.answerText,
+      explanation: event.explanation,
+    },
+  };
+
+  reviewsData.items.push(reviewItem);
+  reviewsData.updated = todayIso();
+  await writeJson(p.reviewsJson, reviewsData);
+
+  return { entryId, summary: `Câu hỏi: ${event.question} -> Đáp án đúng: ${answerDisplay}` };
+}
+
+export async function addPredictErrorLogEntry(
+  subjectDir: string,
+  event: PredictProgressEvent,
+  modId?: string,
+  hub?: string,
+): Promise<{ entryId: string; summary: string }> {
+  const p = subjectPaths(subjectDir);
+  const date = event.t.slice(0, 10);
+  const profile = await getProfile(hub);
+  const reviewOffsets = profile.method?.spacedReviewDays ?? [1, 3, 7, 16, 35];
+
+  const d1 = addDays(date, reviewOffsets[0] ?? 1);
+  const d3 = addDays(date, reviewOffsets[1] ?? 3);
+  const d7 = addDays(date, reviewOffsets[2] ?? 7);
+  const d16 = addDays(date, reviewOffsets[3] ?? 16);
+  const d35 = addDays(date, reviewOffsets[4] ?? 35);
+
+  const modStr = modId ? ` - Module ${modId}` : "";
+  const lesStr = event.lesson ? ` (${event.lesson})` : "";
+  const entryId = `ERR_${date}_${hash(`predict_${event.lesson}_${event.slide}_${event.title}`, 6)}`;
+
+  const lines = [
+    `### [${date}] Lệch dự đoán${modStr}${lesStr}`,
+    `- **Mã mục:** \`${entryId}\``,
+    `- **Ngày ghi nhận:** ${date}`,
+    `- **Tình huống:** ${event.title}`,
+    `- **Dự đoán:** ${event.prediction || "Chưa ghi dự đoán"}`,
+    `- **Kết quả thật:** ${event.output || "Lệch kết quả thực thi"}`,
+    `- **Bài học rút ra:** (tự điền: mental model nào cần sửa?)`,
+    `- **Nguồn / Tham chiếu:** ${event.deck || event.lesson || "Thực hành bài học"}`,
+    `- **Lịch ôn lại giãn cách:** D+1 (${d1}), D+3 (${d3}), D+7 (${d7}), D+16 (${d16}), D+35 (${d35})`,
+    "",
+  ];
+
+  const mdChunk = lines.join("\n");
+  await appendErrorLogChunk(p.errorlogMd, mdChunk);
+
+  // Schedule reviews in polaris/reviews.json
+  const reviewsData = await loadOrCreateReviewsData(p.reviewsJson);
+  const steps: ReviewStep[] = reviewOffsets.map((offset) => ({
+    dayOffset: offset,
+    dueDate: addDays(date, offset),
+    done: false,
+  }));
+
+  const reviewItem: ReviewItem = {
+    id: entryId,
+    type: "error",
+    title: `Lệch dự đoán: ${event.title.slice(0, 60)}`,
+    module: modId,
+    lessonDir: event.lesson,
+    createdDate: date,
+    steps,
+    details: {
+      kind: "predict",
+      title: event.title,
+      prediction: event.prediction,
+      output: event.output,
+    },
+  };
+
+  reviewsData.items.push(reviewItem);
+  reviewsData.updated = todayIso();
+  await writeJson(p.reviewsJson, reviewsData);
+
+  return { entryId, summary: `Lệch dự đoán: ${event.title}` };
+}
+
+export async function addRecallErrorLogEntry(
+  subjectDir: string,
+  event: RecallProgressEvent,
+  modId?: string,
+  hub?: string,
+): Promise<{ entryId: string; summary: string }> {
+  const p = subjectPaths(subjectDir);
+  const date = event.t.slice(0, 10);
+  const profile = await getProfile(hub);
+  const reviewOffsets = profile.method?.spacedReviewDays ?? [1, 3, 7, 16, 35];
+
+  const d1 = addDays(date, reviewOffsets[0] ?? 1);
+  const d3 = addDays(date, reviewOffsets[1] ?? 3);
+  const d7 = addDays(date, reviewOffsets[2] ?? 7);
+  const d16 = addDays(date, reviewOffsets[3] ?? 16);
+  const d35 = addDays(date, reviewOffsets[4] ?? 35);
+
+  const modStr = modId ? ` - Module ${modId}` : "";
+  const lesStr = event.lesson ? ` (${event.lesson})` : "";
+  const entryId = `ERR_${date}_${hash(`recall_${event.lesson}_${event.slide}_${event.palace}_${event.station}`, 6)}`;
+
+  const lines = [
+    `### [${date}] Quên trạm nhớ${modStr}${lesStr}`,
+    `- **Mã mục:** \`${entryId}\``,
+    `- **Ngày ghi nhận:** ${date}`,
+    `- **Cung điện:** ${event.palace} (Trạm ${event.station})`,
+    `- **Trạm:** ${event.place}`,
+    `- **Ý cần nhớ:** ${event.item}`,
+    `- **Neo:** (tự điền: củng cố hình ảnh liên tưởng giữa trạm và ý cần nhớ)`,
+    `- **Nguồn / Tham chiếu:** Cung điện trí nhớ: ${event.palace}`,
+    `- **Lịch ôn lại giãn cách:** D+1 (${d1}), D+3 (${d3}), D+7 (${d7}), D+16 (${d16}), D+35 (${d35})`,
+    "",
+  ];
+
+  const mdChunk = lines.join("\n");
+  await appendErrorLogChunk(p.errorlogMd, mdChunk);
+
+  // Schedule reviews in polaris/reviews.json
+  const reviewsData = await loadOrCreateReviewsData(p.reviewsJson);
+  const steps: ReviewStep[] = reviewOffsets.map((offset) => ({
+    dayOffset: offset,
+    dueDate: addDays(date, offset),
+    done: false,
+  }));
+
+  const reviewItem: ReviewItem = {
+    id: entryId,
+    type: "error",
+    title: `Quên trạm nhớ: ${event.place} -> ${event.item}`,
+    module: modId,
+    lessonDir: event.lesson,
+    createdDate: date,
+    steps,
+    details: {
+      kind: "recall",
+      palace: event.palace,
+      station: event.station,
+      place: event.place,
+      item: event.item,
+    },
+  };
+
+  reviewsData.items.push(reviewItem);
+  reviewsData.updated = todayIso();
+  await writeJson(p.reviewsJson, reviewsData);
+
+  return { entryId, summary: `Quên trạm ${event.station} (${event.place}) -> ${event.item}` };
 }
 
 export async function addErrorLogEntry(
@@ -73,16 +313,7 @@ export async function addErrorLogEntry(
     "",
   ].join("\n");
 
-  // Append to polaris/errorlog.md
-  let existingErrorLog = "";
-  if (existsSync(p.errorlogMd)) {
-    existingErrorLog = await readFile(p.errorlogMd, "utf8");
-  } else {
-    existingErrorLog = "# Sổ lỗi (Error Log & Predict Gaps)\n\n> Ghi nhận các điểm lệch giữa dự đoán (predict) và thực tế (run). Mỗi lỗi là một cơ hội củng cố mental model.\n\n";
-  }
-
-  const updatedErrorLog = existingErrorLog.trimEnd() + "\n\n" + mdChunk;
-  await atomicWriteFile(p.errorlogMd, updatedErrorLog);
+  await appendErrorLogChunk(p.errorlogMd, mdChunk);
 
   // Schedule reviews in polaris/reviews.json
   const reviewsData = await loadOrCreateReviewsData(p.reviewsJson);

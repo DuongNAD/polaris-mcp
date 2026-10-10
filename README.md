@@ -56,7 +56,7 @@ Sister project to [Aurora Slides MCP](https://github.com/DuongNAD/aurora-slides-
         └── 02-kien-truc.outline.md
 ```
 
-## Tools (v0.3.0)
+## Tools (v0.3.1)
 
 Polaris exposes 20 specialized MCP tools across 5 major functional domains:
 
@@ -209,8 +209,8 @@ Every result receives a transparent score (0-100) and evaluation reasons:
    - Preserves line endings and prevents duplicates using `polaris/tasks-map.json`.
 
 4. **Closed-Loop Progress & Spaced Repetition (`polaris_progress_sync`, `polaris_today`):**
-   - `polaris_progress_sync` reads `<course_dir>/progress.jsonl` from Aurora preview server or exported files.
-   - Ingests incorrect quiz answers, predict-run gaps, and missed memory palace stations into `polaris/errorlog.md` ("Sổ lỗi").
+   - `polaris_progress_sync` reads `<course_dir>/progress.jsonl` from Aurora preview server or exported files (supporting Aurora 0.6.1+ optional quiz fields `chosenText`, `answerText`, and `explanation`).
+   - Ingests incorrect quiz answers (displaying option texts or indices, explanations, and prompt for root cause), predict-run gaps (displaying predictions, actual output, and reflection prompt), and missed memory palace stations (displaying place, item, and hook prompt) into `polaris/errorlog.md` ("Sổ lỗi").
    - Schedules spaced repetition reviews at D+1, D+3, D+7, D+16, and D+35 in `polaris/reviews.json`.
    - `polaris_today` calculates 30m/60m session plans and writes `## Today's Dynamic Goal` to the hub's `ACTIVE_LEARNING.md`.
 
@@ -305,6 +305,7 @@ node dist/polaris.mjs help
 
 | Version | Description |
 |---|---|
+| **0.3.1** | Meaningful error-log entries in Sổ lỗi for Aurora 0.6.1 progress sync: Quiz option texts (chosenText/answerText), explanations, learner reflection prompts in "Nguyên nhân gốc rễ", "Bài học rút ra", and "Neo" hooks. |
 | **0.3.0** | Closed-loop integration with Aurora Slides: `polaris_progress_sync` (ingesting quiz, predict, recall, complete events into Sổ lỗi & spaced reviews), `polaris_today` (daily session planner & Active Learning Hub updater), `review` prompt, `progress` and `aurora` guide topics. |
 | **0.2.0** | Autonomous research discovery engine across 8 keyless providers (OpenAlex, arXiv, Semantic Scholar, CrossRef, Wikipedia, GitHub, YouTube, Brave), ranking with transparent evaluation reasons, 24h caching, Review Gate, and full-text capture tools. |
 | **0.1.0** | Initial release: Evidence-based study course creation, profile management, brief validation, fact extraction, 10-section ROADMAP rendering, deterministic scheduling, and Aurora course export. |

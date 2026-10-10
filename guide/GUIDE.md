@@ -181,7 +181,7 @@ Aurora Slides records learner interactions as JSON Lines events in `<course_dir>
 Each event is a JSON object on a single line:
 `{"v":1, "t":"<ISO 8601 with offset>", "course":"<title|null>", "lesson":"<dir>", "deck":"<title>", "slide":<1-based index>, "slideId":"<id|null>", "type":"quiz"|"predict"|"recall"|"complete", ...payload}`
 
-- **`quiz`:** `{"question": string (<=200 chars), "chosen": number[], "answer": number[], "correct": boolean}`
+- **`quiz`:** `{"question": string (<=200 chars), "chosen": number[], "answer": number[], "correct": boolean, "chosenText"?: string[], "answerText"?: string[], "explanation"?: string}`
 - **`predict`:** `{"title": string, "prediction": string, "rating": "right" | "different", "output": string (<=300 chars)}`
 - **`recall`:** `{"palace": string, "station": number, "place": string, "item": string, "rating": "got" | "missed"}`
 - **`complete`:** `{"slides": number, "quiz": string | null, "predictions": string | null}`
@@ -189,8 +189,10 @@ Each event is a JSON object on a single line:
 **Sync & Deduplication Engine:**
 - **Idempotency:** Every processed event's canonical hash is stored in `polaris/progress-state.json`. Running sync multiple times or merging exported files produces no duplicates.
 - **Error Log Generation ("Sổ lỗi"):**
-  - Wrong quiz answers (`correct === false`), predict gaps (`rating === "different"`), and missed palace stations (`rating === "missed"`) are automatically added to `polaris/errorlog.md` in Vietnamese and scheduled for spaced review (D+1, D+3, D+7, D+16, D+35).
-  - De-duplicated per `(lesson, slide, type, key)` so repeated incorrect attempts do not spam the error log.
+  - **Quiz entries:** Formatted with a "Câu hỏi" line with the question; "Đã chọn" and "Đáp án đúng" with the option texts when present (fallback to indices `[n]`); "Giải thích" when `explanation` is provided; "Nguyên nhân gốc rễ" left as a reflection prompt for the learner (`(tự điền khi ôn: vì sao chọn sai?)`), never filled with the question.
+  - **Predict entries:** Formatted with "Dự đoán" (learner prediction), "Kết quả thật" (actual output snippet), and "Bài học rút ra" (`(tự điền: mental model nào cần sửa?)`).
+  - **Recall entries:** Formatted with "Trạm" (palace place), "Ý cần nhớ" (item to recall), and "Neo" (`(tự điền: củng cố hình ảnh liên tưởng giữa trạm và ý cần nhớ)`).
+  - All error log entries automatically schedule spaced repetition reviews (D+1, D+3, D+7, D+16, D+35) in `polaris/reviews.json` and are de-duplicated per `(lesson, slide, type, key)`.
 - **Lesson Completion:** `complete` events automatically mark the lesson done (`polaris_lesson_done`) with the event date and schedule spaced reviews.
 - **Summary & Actionable Guidance:** Returns per-lesson activity, quiz accuracy, prediction accuracy, missed palace stations, new error log entries, reviews due today, and 1-3 concrete suggestions for the next session.
 

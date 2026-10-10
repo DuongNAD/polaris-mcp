@@ -579,6 +579,9 @@ export const QuizProgressEventSchema = ProgressBaseEventSchema.extend({
   chosen: z.array(z.number().int()),
   answer: z.array(z.number().int()),
   correct: z.boolean(),
+  chosenText: z.array(z.string()).nullable().optional(),
+  answerText: z.array(z.string()).nullable().optional(),
+  explanation: z.string().nullable().optional(),
 });
 
 export const PredictProgressEventSchema = ProgressBaseEventSchema.extend({

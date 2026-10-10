@@ -759,10 +759,19 @@ try {
 
   const updatedErrorlogContent = readFileSync(errorlogMdPath, "utf8");
   ok(
-    "errorlog.md contains 3 new error entries with correct details",
+    "errorlog.md contains 3 new error entries with correct details and prompts",
     updatedErrorlogContent.includes("ReAct agent khác gì so với Chain-of-Thought tiêu chuẩn?") &&
+      updatedErrorlogContent.includes("**Đã chọn:** [1]") &&
+      updatedErrorlogContent.includes("**Đáp án đúng:** [2]") &&
+      updatedErrorlogContent.includes("**Nguyên nhân gốc rễ:** (tự điền khi ôn: vì sao chọn sai?)") &&
+      !updatedErrorlogContent.includes("Nguyên nhân gốc rễ:** Trắc nghiệm:") &&
+      !updatedErrorlogContent.includes("Nguyên nhân gốc rễ:** ReAct") &&
       updatedErrorlogContent.includes("Dự đoán output khi tool trả về mã lỗi 404") &&
-      updatedErrorlogContent.includes("Bàn làm việc"),
+      updatedErrorlogContent.includes("**Dự đoán:** Agent sẽ crash ngay lập tức") &&
+      updatedErrorlogContent.includes("**Bài học rút ra:** (tự điền: mental model nào cần sửa?)") &&
+      updatedErrorlogContent.includes("**Trạm:** Bàn làm việc") &&
+      updatedErrorlogContent.includes("**Ý cần nhớ:** Vòng lặp ReAct Think-Act-Observe") &&
+      updatedErrorlogContent.includes("**Neo:** (tự điền: củng cố hình ảnh liên tưởng giữa trạm và ý cần nhớ)"),
   );
 
   // Idempotency: second sync adds nothing
@@ -778,7 +787,7 @@ try {
       textOf(rSync2).includes("Bài học hoàn thành mới: 0"),
   );
 
-  // Exported file merge test
+  // Exported file merge test with quiz chosenText, answerText, and explanation
   const exportedProgressFile = join(TEST_DIR, "aurora-progress-ai-agents-101.jsonl");
   const exportedLines = [
     ...progressFixtureLines.slice(0, 4), // Duplicates of previous events
@@ -794,6 +803,9 @@ try {
       question: "Tại sao cần max_steps trong vòng lặp ReAct?",
       chosen: [0],
       answer: [3],
+      chosenText: ["Để agent chạy nhanh hơn"],
+      answerText: ["Tránh vòng lặp vô hạn và bùng nổ token"],
+      explanation: "max_steps là chốt chặn an toàn bắt buộc để tránh tốn token ngoài tầm kiểm soát.",
       correct: false,
     }),
   ];
@@ -809,6 +821,15 @@ try {
     !rSyncExport.isError &&
       textOf(rSyncExport).includes("Mục mới thêm vào Sổ lỗi: 1") &&
       textOf(rSyncExport).includes("Tại sao cần max_steps trong vòng lặp ReAct?"),
+  );
+
+  const finalErrorlogContent = readFileSync(errorlogMdPath, "utf8");
+  ok(
+    "errorlog.md quiz entry with chosenText/answerText/explanation displays option texts and explanation",
+    finalErrorlogContent.includes("**Đã chọn:** Để agent chạy nhanh hơn") &&
+      finalErrorlogContent.includes("**Đáp án đúng:** Tránh vòng lặp vô hạn và bùng nổ token") &&
+      finalErrorlogContent.includes("**Giải thích:** max_steps là chốt chặn an toàn bắt buộc") &&
+      !finalErrorlogContent.includes("Nguyên nhân gốc rễ:** Tại sao cần max_steps"),
   );
 
   // 3.21 polaris_today
@@ -898,7 +919,7 @@ try {
   ok("CLI today", todayCli.includes("Kế hoạch phiên học") && todayCli.includes("## Today's Dynamic Goal"));
 
   const versionCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "version"], { encoding: "utf8" });
-  ok("CLI version 0.3.0", versionCli.trim() === "0.3.0");
+  ok("CLI version 0.3.1", versionCli.trim() === "0.3.1");
 
   const helpCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "help"], { encoding: "utf8" });
   ok("CLI help", helpCli.includes("Usage: node polaris.mjs") && helpCli.includes("progress <subject_dir>") && helpCli.includes("today <subject_dir>"));

@@ -56,7 +56,7 @@ Dự án song hành cùng [Aurora Slides MCP](https://github.com/DuongNAD/aurora
         └── 02-kien-truc.outline.md
 ```
 
-## Danh sách công cụ (v0.3.0)
+## Danh sách công cụ (v0.3.1)
 
 Polaris cung cấp 20 công cụ MCP chia theo 5 nhóm chức năng:
 
@@ -209,8 +209,8 @@ Mỗi tài liệu được chấm điểm (0-100) kèm lý do rõ ràng:
    - Giữ nguyên định dạng xuống dòng và chống trùng lặp qua `polaris/tasks-map.json`.
 
 4. **Đồng bộ tiến độ & Ôn tập ngắt quãng (`polaris_progress_sync`, `polaris_today`):**
-   - `polaris_progress_sync` đọc file `progress.jsonl` do preview server của Aurora hoặc người học xuất ra.
-   - Tự động ghi các lỗi trắc nghiệm, lệch dự đoán code và trạm trí nhớ quên vào `polaris/errorlog.md` ("Sổ lỗi").
+   - `polaris_progress_sync` đọc file `progress.jsonl` do preview server của Aurora hoặc người học xuất ra (hỗ trợ các trường tùy chọn trong Aurora 0.6.1+: `chosenText`, `answerText`, `explanation`).
+   - Tự động ghi các lỗi trắc nghiệm (hiển thị văn bản phương án hoặc chỉ số, lời giải thích, và dòng nhắc tự điền nguyên nhân), lệch dự đoán code (hiển thị dự đoán, kết quả thật, và dòng nhắc mental model) và trạm trí nhớ quên (hiển thị trạm, ý cần nhớ, và dòng nhắc củng cố neo) vào `polaris/errorlog.md` ("Sổ lỗi").
    - Lập lịch ôn tập ngắt quãng D+1, D+3, D+7, D+16, D+35 trong `polaris/reviews.json`.
    - `polaris_today` tính toán phiên học 30p/60p và cập nhật khối `## Today's Dynamic Goal` vào `ACTIVE_LEARNING.md` của Hub.
 
@@ -305,6 +305,7 @@ node dist/polaris.mjs help
 
 | Phiên bản | Mô tả |
 |---|---|
+| **0.3.1** | Cải tiến Sổ lỗi khi đồng bộ tiến độ Aurora 0.6.1: Hiển thị văn bản phương án trắc nghiệm (chosenText/answerText), giải thích (explanation), gợi ý tự điền cho "Nguyên nhân gốc rễ", "Bài học rút ra" và "Neo" ghi nhớ. |
 | **0.3.0** | Tích hợp vòng lặp học tập khép kín cùng Aurora Slides: `polaris_progress_sync` (nạp sự kiện quiz, predict, recall, complete vào Sổ lỗi & lịch ôn tập), `polaris_today` (lập kế hoạch buổi học & cập nhật Active Learning Hub), prompt `review`, bổ sung chủ đề hướng dẫn `progress` và `aurora`. |
 | **0.2.0** | Tích hợp bộ máy nghiên cứu & tìm kiếm tự động qua 8 nhà cung cấp không cần API key (OpenAlex, arXiv, Semantic Scholar, CrossRef, Wikipedia, GitHub, YouTube, Brave), chấm điểm minh bạch kèm lý do đánh giá, bộ nhớ đệm 24h, cổng duyệt tài liệu (Review Gate) và công cụ trích xuất toàn văn. |
 | **0.1.0** | Bản phát hành đầu tiên: Xây dựng khóa học dựa trên bằng chứng, quản lý hồ sơ người học, kiểm thực brief, trích xuất fact, kết xuất ROADMAP chuẩn 10 mục tiếng Việt, lập lịch học xác định theo tuần và xuất khóa học cho Aurora Slides. |
