@@ -1,6 +1,6 @@
 {
   "name": "polaris-mcp",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "MCP server and CLI that gives coding agents structure to build personal evidence-based study courses.",
   "author": "DuongNAD (https://github.com/DuongNAD)",
   "repository": {

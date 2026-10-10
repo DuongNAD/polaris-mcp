@@ -43,6 +43,7 @@ export interface ProgressSyncResult {
   skippedLinesCount: number;
   malformedCount: number;
   unknownTypeCount: number;
+  vegaCardEventsCount?: number;
   newErrorLogEntries: Array<{ id: string; why: string; fix: string }>;
   lessonsCompleted: string[];
   reviewsDueToday: number;
@@ -145,6 +146,7 @@ export async function syncProgress(options: ProgressSyncOptions): Promise<Progre
 
   let malformedCount = 0;
   let unknownTypeCount = 0;
+  let vegaCardEventsCount = 0;
   let newEventsCount = 0;
   const newErrorLogEntries: Array<{ id: string; why: string; fix: string }> = [];
   const newlyCompletedLessons: string[] = [];
@@ -193,6 +195,11 @@ export async function syncProgress(options: ProgressSyncOptions): Promise<Progre
       const eventType = objRecord.type;
       if (!eventType || typeof eventType !== "string") {
         malformedCount++;
+        continue;
+      }
+
+      if (eventType === "card") {
+        vegaCardEventsCount++;
         continue;
       }
 
@@ -445,6 +452,13 @@ export async function syncProgress(options: ProgressSyncOptions): Promise<Progre
 
   lines.push("", "Gợi ý cho phiên học tiếp theo:", ...suggestions.map((s) => `  ${s}`));
 
+  if (vegaCardEventsCount > 0) {
+    lines.push(
+      "",
+      `${vegaCardEventsCount} sự kiện thẻ ("card") dành riêng cho Vega FSRS (${vegaCardEventsCount} card events left for Vega).`,
+    );
+  }
+
   const skippedTotal = malformedCount + unknownTypeCount;
   if (skippedTotal > 0) {
     lines.push(
@@ -461,6 +475,7 @@ export async function syncProgress(options: ProgressSyncOptions): Promise<Progre
     skippedLinesCount: skippedTotal,
     malformedCount,
     unknownTypeCount,
+    vegaCardEventsCount,
     newErrorLogEntries,
     lessonsCompleted: Array.from(completedLessonsSet),
     reviewsDueToday: due.dueCount,

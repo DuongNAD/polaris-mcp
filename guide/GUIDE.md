@@ -185,6 +185,7 @@ Each event is a JSON object on a single line:
 - **`predict`:** `{"title": string, "prediction": string, "rating": "right" | "different", "output": string (<=300 chars)}`
 - **`recall`:** `{"palace": string, "station": number, "place": string, "item": string, "rating": "got" | "missed"}`
 - **`complete`:** `{"slides": number, "quiz": string | null, "predictions": string | null}`
+- **`card`:** Flashcard events emitted for [Vega MCP](https://github.com/DuongNAD/vega-mcp). `polaris_progress_sync` recognizes these events and skips them silently (never counted as malformed or unknown), preserving them for `vega_sync`.
 
 **Sync & Deduplication Engine:**
 - **Idempotency:** Every processed event's canonical hash is stored in `polaris/progress-state.json`. Running sync multiple times or merging exported files produces no duplicates.
@@ -194,7 +195,25 @@ Each event is a JSON object on a single line:
   - **Recall entries:** Formatted with "Trạm" (palace place), "Ý cần nhớ" (item to recall), and "Neo" (`(tự điền: củng cố hình ảnh liên tưởng giữa trạm và ý cần nhớ)`).
   - All error log entries automatically schedule spaced repetition reviews (D+1, D+3, D+7, D+16, D+35) in `polaris/reviews.json` and are de-duplicated per `(lesson, slide, type, key)`.
 - **Lesson Completion:** `complete` events automatically mark the lesson done (`polaris_lesson_done`) with the event date and schedule spaced reviews.
-- **Summary & Actionable Guidance:** Returns per-lesson activity, quiz accuracy, prediction accuracy, missed palace stations, new error log entries, reviews due today, and 1-3 concrete suggestions for the next session.
+- **Summary & Actionable Guidance:** Returns per-lesson activity, quiz accuracy, prediction accuracy, missed palace stations, new error log entries, reviews due today, count of card events left for Vega, and 1-3 concrete suggestions for the next session.
+
+## today
+
+`polaris_today` calculates the daily session plan and keeps the learner's dynamic goals in sync across the ecosystem:
+
+**Daily Session Planning:**
+- **Session Recipe Budget:** Produces a structured 60- or 30-minute plan following learner profile slots:
+  - 30 min: 5m spaced reviews + 25m lesson practice (or 10m Vega + 5m spaced reviews + 15m lesson practice when Vega cards are due).
+  - 60 min: 5m spaced reviews + 10m theory & memory anchors + 35m practice + 7m self-check & error log + 3m wrap-up (or 10m Vega + 5m spaced reviews + 10m theory + 25m practice + 7m self-check + 3m wrap-up when Vega cards are due).
+- **Spaced Reviews:** Queries all due error log and lesson review items from `polaris/reviews.json` on or before the target date.
+- **Next Scheduled Lesson:** Identifies the next uncompleted lesson from `polaris/schedule.json` and `course-map.json`, providing direct paths to Aurora slide decks and lesson outline skeletons with practice tasks and DoD.
+- **Vega FSRS Card Load:**
+  - Reads `<hub>/.vega/cards.json` (read-only) if present.
+  - Counts non-suspended, non-deleted Vega cards due by the end of today, as well as the count for the current subject when cards carry a matching `subject`.
+  - Adds a plan line with the next step `"vega_sync, then vega_session to review"` and budgets 10 minutes in the session recipe.
+  - If `.vega/cards.json` is absent or unreadable, the line is omitted with zero errors.
+- **Dynamic Goal Sync (`write: true`):**
+  - Inserts or replaces the `## Today's Dynamic Goal` section in `<hub>/ACTIVE_LEARNING.md`, preserving other hub sections and newline formatting.
 
 ## aurora
 

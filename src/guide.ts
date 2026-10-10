@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { PKG_ROOT } from "./util.js";
 
-export const TOPICS = ["overview", "pipeline", "gates", "sources", "roadmap", "research", "schedule", "export", "tracking", "progress", "aurora", "learner", "rules"] as const;
+export const TOPICS = ["overview", "pipeline", "gates", "sources", "roadmap", "research", "schedule", "export", "tracking", "progress", "today", "aurora", "learner", "rules"] as const;
 export type Topic = (typeof TOPICS)[number];
 
 let sections: Map<string, string> | undefined;

@@ -829,6 +829,18 @@ try {
       quiz: "3/4",
       predictions: "2/3",
     }),
+    JSON.stringify({
+      v: 1,
+      t: "2026-10-15T14:48:00+07:00",
+      course: "AI Agents 101",
+      lesson: "01-agent-va-vong-lap-react-a",
+      deck: "Agent và Vòng lặp ReAct",
+      slide: 9,
+      slideId: "s_card_1",
+      type: "card",
+      front: "ReAct loop components?",
+      back: "Thought, Action, Observation",
+    }),
     "{ invalid json line that should be skipped",
     JSON.stringify({
       v: 1,
@@ -852,6 +864,11 @@ try {
     textOf(r).includes("Mục mới thêm vào Sổ lỗi: 3") &&
       textOf(r).includes("Bài học hoàn thành mới: 1") &&
       textOf(r).includes("Bỏ qua 2 dòng (1 lỗi định dạng, 1 sự kiện không xác định)"),
+  );
+  ok(
+    "progress_sync skips card event without counting as malformed or unknown",
+    textOf(r).includes("1 card events left for Vega") &&
+      textOf(r).includes("1 sự kiện thẻ (\"card\") dành riêng cho Vega"),
   );
 
   const updatedErrorlogContent = readFileSync(errorlogMdPath, "utf8");
@@ -984,12 +1001,68 @@ try {
       hubAfterWrite2.includes("GCI HW3 submission deadline"),
   );
 
+  // polaris_today with Vega cards fixture (2 due, 1 future, 1 suspended)
+  const vegaDir = join(TEST_DIR, ".vega");
+  mkdirSync(vegaDir, { recursive: true });
+  const vegaCardsFixture = [
+    {
+      id: "card-1",
+      subject: "AI Agents 101",
+      fsrs: {
+        due: "2026-10-16T08:00:00.000Z",
+        state: 1,
+      },
+    },
+    {
+      id: "card-2",
+      subject: "AI Agents 101",
+      fsrs: {
+        due: "2026-10-16T12:00:00.000Z",
+        state: 2,
+      },
+    },
+    {
+      id: "card-3",
+      subject: "AI Agents 101",
+      fsrs: {
+        due: "2026-10-25T08:00:00.000Z",
+        state: 1,
+      },
+    },
+    {
+      id: "card-4",
+      subject: "AI Agents 101",
+      suspended: true,
+      fsrs: {
+        due: "2026-10-16T08:00:00.000Z",
+        state: 1,
+      },
+    },
+  ];
+  writeFileSync(join(vegaDir, "cards.json"), JSON.stringify(vegaCardsFixture, null, 2), "utf8");
+
+  const rTodayVega = await call("polaris_today", {
+    subject_dir: SUBJECT_DIR,
+    date: "2026-10-16",
+    hub: TEST_DIR,
+  });
+  ok(
+    "polaris_today with vega cards shows 2 due, next step, and 10min recipe budget",
+    !rTodayVega.isError &&
+      textOf(rTodayVega).includes("2 thẻ đến hạn hôm nay (2 thẻ thuộc môn này)") &&
+      textOf(rTodayVega).includes("vega_sync, then vega_session to review") &&
+      textOf(rTodayVega).includes("10 phút: Thẻ nhớ Vega FSRS (2 thẻ đến hạn)"),
+  );
+
   // 3.22 CLI tests
   const guideCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "guide", "schedule"], { encoding: "utf8" });
   ok("CLI guide schedule", guideCli.includes("Topological Sorting:"));
 
   const guideProgressCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "guide", "progress"], { encoding: "utf8" });
   ok("CLI guide progress", guideProgressCli.includes("Event Contract:"));
+
+  const guideTodayCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "guide", "today"], { encoding: "utf8" });
+  ok("CLI guide today", guideTodayCli.includes("Vega FSRS Card Load:"));
 
   const guideAuroraCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "guide", "aurora"], { encoding: "utf8" });
   ok("CLI guide aurora", guideAuroraCli.includes("Polaris and Aurora Slides form a closed-loop"));
@@ -1016,7 +1089,7 @@ try {
   ok("CLI today", todayCli.includes("Kế hoạch phiên học") && todayCli.includes("## Today's Dynamic Goal"));
 
   const versionCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "version"], { encoding: "utf8" });
-  ok("CLI version 0.3.2", versionCli.trim() === "0.3.2");
+  ok("CLI version 0.3.3", versionCli.trim() === "0.3.3");
 
   const helpCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "help"], { encoding: "utf8" });
   ok("CLI help", helpCli.includes("Usage: node polaris.mjs") && helpCli.includes("progress <subject_dir>") && helpCli.includes("today <subject_dir>"));

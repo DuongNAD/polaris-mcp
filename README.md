@@ -57,14 +57,14 @@ Sister project to [Aurora Slides MCP](https://github.com/DuongNAD/aurora-slides-
 
 > **Note on API Cache:** Regenerable search API responses (24h TTL) are stored in the global cache directory (`%LOCALAPPDATA%/polaris/cache` or `POLARIS_CACHE_DIR`), saving space on exFAT drives.
 
-## Tools (v0.3.2)
+## Tools (v0.3.3)
 
 Polaris exposes 20 specialized MCP tools across 5 major functional domains:
 
 ### 1. Profile & Setup
 | Tool | Description |
 |---|---|
-| `polaris_guide` | Documentation on workflow, pipeline, quality gates, source policy, research engine, schedule, export, tracking, progress sync, aurora workflow, and learner method. |
+| `polaris_guide` | Documentation on workflow, pipeline, quality gates, source policy, research engine, schedule, export, tracking, progress sync, today session planning, aurora workflow, and learner method. |
 | `polaris_profile` | Read (`get`) or update (`update`) learner preferences, weekly slots (`slots`), blackout dates (`blackouts`), and session recipes. |
 | `polaris_start` | Initialize `<subject>/polaris/` and save validated `brief.json` with measurable outcomes. |
 
@@ -95,11 +95,11 @@ Polaris exposes 20 specialized MCP tools across 5 major functional domains:
 | Tool | Description |
 |---|---|
 | `polaris_tasks_sync` | Sync scheduled lessons and module checkpoints into `<subject>/TASKS.md` under `## Polaris` in hub format (`- [ ] [Deadline: ...] [Priority: P2] ...`) with duplicate prevention. |
-| `polaris_progress_sync` | Read Aurora Slides interactive learning events from `progress.jsonl` (or exported files), map lessons to modules, add error log entries for wrong quizzes, predict gaps, and missed palace stations, and schedule spaced reviews (D+1, D+3, D+7, D+16, D+35) for completed lessons. Idempotent. |
+| `polaris_progress_sync` | Read Aurora Slides interactive learning events from `progress.jsonl` (or exported files), map lessons to modules, add error log entries for wrong quizzes, predict gaps, and missed palace stations, schedule spaced reviews (D+1, D+3, D+7, D+16, D+35) for completed lessons, and skip Vega "card" flashcard events cleanly. Idempotent. |
 | `polaris_errorlog_add` | Record prediction errors and gaps into `polaris/errorlog.md` ("Sổ lỗi") and schedule spaced review iterations. |
 | `polaris_lesson_done` | Record lesson completion in `polaris/reviews.json` and schedule spaced reviews after 1, 3, 7, 16, and 35 days. |
 | `polaris_review_due` | Query lessons and error log items due for review on or before a given date, ordered oldest first. |
-| `polaris_today` | Generate a 60- or 30-minute session plan following learner session recipe (due reviews, next scheduled lesson with slide & outline paths, practice tier with DoD). Optionally write or replace `## Today's Dynamic Goal` in `<hub>/ACTIVE_LEARNING.md`. |
+| `polaris_today` | Generate a 60- or 30-minute session plan following learner session recipe (due reviews, Vega FSRS card review load from `<hub>/.vega/cards.json` with next step "vega_sync, then vega_session to review", next scheduled lesson with slide & outline paths, practice tier with DoD). Optionally write or replace `## Today's Dynamic Goal` in `<hub>/ACTIVE_LEARNING.md`. |
 
 ## Polaris + Aurora
 
@@ -138,6 +138,7 @@ flowchart TD
 |---|---|
 | **Polaris** (this repo) | Course architect |
 | **[Aurora Slides](https://github.com/DuongNAD/aurora-slides-mcp)** | Lessons, practice, and progress events |
+| **[Vega](https://github.com/DuongNAD/vega-mcp)** | FSRS spaced repetition flashcard memory engine (`<hub>/.vega/cards.json`) |
 | **[SmartDrive-OS](https://github.com/DuongNAD/smart-drive-os)** | SSD governance, learning-aware search over facts/sources/captures, protection of subject folders, post-write index hook |
 | **[Constellation](https://github.com/DuongNAD/constellation-mcp)** | One manifest, registration into Claude Code / Antigravity / Cursor / Codex, health checks, drift doctor, updates |
 
@@ -221,10 +222,10 @@ Every result receives a transparent score (0-100) and evaluation reasons:
    - Preserves line endings and prevents duplicates using `polaris/tasks-map.json`.
 
 4. **Closed-Loop Progress & Spaced Repetition (`polaris_progress_sync`, `polaris_today`):**
-   - `polaris_progress_sync` reads `<course_dir>/progress.jsonl` from Aurora preview server or exported files (supporting Aurora 0.6.1+ optional quiz fields `chosenText`, `answerText`, and `explanation`). The canonical, versioned definition with JSON Schema and fixtures lives in [Constellation's contracts](https://github.com/DuongNAD/constellation-mcp/tree/main/contracts), together with the learning-unit markers, the post-write hook and the source labels; this README summarizes them.
+   - `polaris_progress_sync` reads `<course_dir>/progress.jsonl` from Aurora preview server or exported files (supporting Aurora 0.6.1+ optional quiz fields `chosenText`, `answerText`, and `explanation`), while recognizing and cleanly skipping Vega `"card"` flashcard events. The canonical, versioned definition with JSON Schema and fixtures lives in [Constellation's contracts](https://github.com/DuongNAD/constellation-mcp/tree/main/contracts), together with the learning-unit markers, the post-write hook and the source labels; this README summarizes them.
    - Ingests incorrect quiz answers (displaying option texts or indices, explanations, and prompt for root cause), predict-run gaps (displaying predictions, actual output, and reflection prompt), and missed memory palace stations (displaying place, item, and hook prompt) into `polaris/errorlog.md` ("Sổ lỗi").
    - Schedules spaced repetition reviews at D+1, D+3, D+7, D+16, and D+35 in `polaris/reviews.json`.
-   - `polaris_today` calculates 30m/60m session plans and writes `## Today's Dynamic Goal` to the hub's `ACTIVE_LEARNING.md`.
+   - `polaris_today` calculates 30m/60m session plans, reads `<hub>/.vega/cards.json` to show Vega cards due by the end of today with the next step `"vega_sync, then vega_session to review"`, budgets 10 minutes in the session recipe when cards are due, and writes `## Today's Dynamic Goal` to the hub's `ACTIVE_LEARNING.md`.
 
 ## Agent Prompts & Workflow
 
@@ -342,6 +343,7 @@ Polaris integrates seamlessly with [SmartDrive-OS](https://github.com/DuongNAD/s
 
 | Version | Description |
 |---|---|
+| **0.3.3** | Vega MCP integration: Read-only load of due Vega FSRS cards (`<hub>/.vega/cards.json`) in `polaris_today` with 10-minute session recipe budget; silent handling of "card" progress events in `polaris_progress_sync`. |
 | **0.3.2** | Fit learner's exFAT SSD and SmartDrive-OS: Moved 24h regenerable API cache off subject folders to global cache (%LOCALAPPDATA%/polaris/cache or POLARIS_CACHE_DIR) with legacy cache cleanup notice; added non-blocking detached SmartDrive update hooks with per-folder 2s coalescing, POLARIS_SMARTDRIVE=off, and POLARIS_SMARTDRIVE_CMD. |
 | **0.3.1** | Meaningful error-log entries in Sổ lỗi for Aurora 0.6.1 progress sync: Quiz option texts (chosenText/answerText), explanations, learner reflection prompts in "Nguyên nhân gốc rễ", "Bài học rút ra", and "Neo" hooks. |
 | **0.3.0** | Closed-loop integration with Aurora Slides: `polaris_progress_sync` (ingesting quiz, predict, recall, complete events into Sổ lỗi & spaced reviews), `polaris_today` (daily session planner & Active Learning Hub updater), `review` prompt, `progress` and `aurora` guide topics. |

@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import {
   type CourseMap,
   type ProgressState,
@@ -40,16 +40,165 @@ export interface NextLessonInfo {
   deadline?: string;
 }
 
+export interface VegaCard {
+  id?: string;
+  subject?: string;
+  suspended?: boolean;
+  deleted?: boolean;
+  fsrs?: {
+    due?: string;
+    state?: number | string;
+    [key: string]: unknown;
+  };
+  due?: string;
+  [key: string]: unknown;
+}
+
+export interface VegaCardsLoad {
+  dueCount: number;
+  subjectDueCount: number;
+  hasSubjectCards: boolean;
+  totalCards: number;
+}
+
 export interface TodayResult {
   date: string;
   minutes: number;
   subjectTitle: string;
   dueReviewsCount: number;
+  vegaDueCount?: number;
+  vegaSubjectDueCount?: number;
   nextLesson?: NextLessonInfo;
   dynamicGoalMarkdown: string;
   written: boolean;
   writtenPath?: string;
   summary: string;
+}
+
+export function isVegaCardDueByEndOfDay(dueStr: string, targetDate: string): boolean {
+  if (!dueStr || typeof dueStr !== "string") return false;
+  const trimmed = dueStr.trim();
+  const datePrefix = trimmed.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(datePrefix)) {
+    if (datePrefix <= targetDate) return true;
+  }
+  const parsed = Date.parse(trimmed);
+  if (!isNaN(parsed)) {
+    const endOfDayTs = new Date(`${targetDate}T23:59:59.999Z`).getTime();
+    if (parsed <= endOfDayTs) return true;
+  }
+  return false;
+}
+
+export function matchesCardSubject(
+  cardSubject: string,
+  subjectTitle: string,
+  slug: string,
+  subjectDir: string,
+  briefSubject?: string,
+  briefSlug?: string,
+): boolean {
+  const cNorm = cardSubject.trim().toLowerCase();
+  const cSlug = slugify(cardSubject);
+  const dirName = basename(resolve(subjectDir));
+
+  return (
+    cNorm === subjectTitle.toLowerCase() ||
+    cSlug === slugify(subjectTitle) ||
+    cSlug === slug ||
+    cSlug === slugify(dirName) ||
+    cNorm === dirName.toLowerCase() ||
+    (briefSubject ? cNorm === briefSubject.toLowerCase() || cSlug === slugify(briefSubject) : false) ||
+    (briefSlug ? cSlug === briefSlug || cNorm === briefSlug.toLowerCase() : false)
+  );
+}
+
+export async function readVegaCards(
+  hub: string,
+  targetDate: string,
+  subjectContext: {
+    subjectDir: string;
+    subjectTitle: string;
+    slug: string;
+    briefSubject?: string;
+    briefSlug?: string;
+  },
+): Promise<VegaCardsLoad | undefined> {
+  const vegaCardsPath = join(hub, ".vega", "cards.json");
+  if (!existsSync(vegaCardsPath)) {
+    return undefined;
+  }
+
+  try {
+    const rawText = await readFile(vegaCardsPath, "utf8");
+    const parsed = JSON.parse(rawText.replace(/^\uFEFF/, ""));
+    if (!parsed) return undefined;
+
+    let cardList: VegaCard[] = [];
+    if (Array.isArray(parsed)) {
+      cardList = parsed;
+    } else if (typeof parsed === "object") {
+      const obj = parsed as Record<string, unknown>;
+      if (Array.isArray(obj.cards)) {
+        cardList = obj.cards as VegaCard[];
+      } else if (obj.cards && typeof obj.cards === "object") {
+        cardList = Object.values(obj.cards) as VegaCard[];
+      } else if (Array.isArray(obj.items)) {
+        cardList = obj.items as VegaCard[];
+      } else {
+        const vals = Object.values(obj);
+        if (vals.length > 0 && typeof vals[0] === "object" && vals[0] !== null) {
+          cardList = vals as VegaCard[];
+        }
+      }
+    }
+
+    if (!Array.isArray(cardList)) {
+      return undefined;
+    }
+
+    let dueCount = 0;
+    let subjectDueCount = 0;
+    let hasSubjectCards = false;
+
+    for (const card of cardList) {
+      if (!card || typeof card !== "object") continue;
+      if (card.suspended === true || card.deleted === true) continue;
+
+      const dueStr = card.fsrs?.due || card.due;
+      if (!dueStr || typeof dueStr !== "string") continue;
+
+      const isDue = isVegaCardDueByEndOfDay(dueStr, targetDate);
+      if (!isDue) continue;
+
+      dueCount++;
+
+      if (typeof card.subject === "string" && card.subject.trim().length > 0) {
+        hasSubjectCards = true;
+        if (
+          matchesCardSubject(
+            card.subject,
+            subjectContext.subjectTitle,
+            subjectContext.slug,
+            subjectContext.subjectDir,
+            subjectContext.briefSubject,
+            subjectContext.briefSlug,
+          )
+        ) {
+          subjectDueCount++;
+        }
+      }
+    }
+
+    return {
+      dueCount,
+      subjectDueCount,
+      hasSubjectCards,
+      totalCards: cardList.length,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 export async function getTodayPlan(options: TodayOptions): Promise<TodayResult> {
@@ -237,7 +386,18 @@ export async function getTodayPlan(options: TodayOptions): Promise<TodayResult> 
     written = true;
   }
 
-  // 5. Build summary output
+  // 5. Read Vega cards load if <hub>/.vega/cards.json exists
+  const vegaCardsLoad = await readVegaCards(hub, targetDate, {
+    subjectDir: subject_dir,
+    subjectTitle,
+    slug,
+    briefSubject: brief?.subject,
+    briefSlug: brief?.slug,
+  });
+
+  const hasVegaDue = Boolean(vegaCardsLoad && vegaCardsLoad.dueCount > 0);
+
+  // 6. Build summary output
   const lines: string[] = [
     `Kế hoạch phiên học (${minutes} phút) · Ngày ${targetDate}:`,
     "",
@@ -246,19 +406,39 @@ export async function getTodayPlan(options: TodayOptions): Promise<TodayResult> 
     "Công thức phiên học (Session Recipe):",
   ];
 
-  if (minutes <= 30) {
-    lines.push(
-      `  - 5 phút:  Ôn tập giãn cách (${due.dueCount} mục đến hạn)`,
-      `  - 25 phút: Thực hành bài học (${nextLesson ? `${nextLesson.title}` : "Củng cố kiến thức"})`,
-    );
+  if (hasVegaDue) {
+    if (minutes <= 30) {
+      lines.push(
+        `  - 10 phút: Thẻ nhớ Vega FSRS (${vegaCardsLoad!.dueCount} thẻ đến hạn)`,
+        `  - 5 phút:  Ôn tập giãn cách (${due.dueCount} mục đến hạn)`,
+        `  - 15 phút: Thực hành bài học (${nextLesson ? `${nextLesson.title}` : "Củng cố kiến thức"})`,
+      );
+    } else {
+      const practiceMins = Math.max(15, minutes - 35);
+      lines.push(
+        `  - 10 phút: Thẻ nhớ Vega FSRS (${vegaCardsLoad!.dueCount} thẻ đến hạn)`,
+        `  - 5 phút:  Ôn tập giãn cách (${due.dueCount} mục đến hạn)`,
+        `  - 10 phút: Lý thuyết & Neo trí nhớ (${nextLesson ? `${nextLesson.title}` : "Khái niệm cốt lõi"})`,
+        `  - ${practiceMins} phút: Thực hành (${nextLesson ? nextLesson.practiceTask : "Bài tập thực hành"})`,
+        `  - 7 phút:  Tự kiểm tra (Self-check & ghi Sổ lỗi)`,
+        `  - 3 phút:  Đúc kết & Kế hoạch phiên tiếp theo`,
+      );
+    }
   } else {
-    lines.push(
-      `  - 5 phút:  Ôn tập giãn cách (${due.dueCount} mục đến hạn)`,
-      `  - 10 phút: Lý thuyết & Neo trí nhớ (${nextLesson ? `${nextLesson.title}` : "Khái niệm cốt lõi"})`,
-      `  - 35 phút: Thực hành (${nextLesson ? nextLesson.practiceTask : "Bài tập thực hành"})`,
-      `  - 7 phút:  Tự kiểm tra (Self-check & ghi Sổ lỗi)`,
-      `  - 3 phút:  Đúc kết & Kế hoạch phiên tiếp theo`,
-    );
+    if (minutes <= 30) {
+      lines.push(
+        `  - 5 phút:  Ôn tập giãn cách (${due.dueCount} mục đến hạn)`,
+        `  - 25 phút: Thực hành bài học (${nextLesson ? `${nextLesson.title}` : "Củng cố kiến thức"})`,
+      );
+    } else {
+      lines.push(
+        `  - 5 phút:  Ôn tập giãn cách (${due.dueCount} mục đến hạn)`,
+        `  - 10 phút: Lý thuyết & Neo trí nhớ (${nextLesson ? `${nextLesson.title}` : "Khái niệm cốt lõi"})`,
+        `  - 35 phút: Thực hành (${nextLesson ? nextLesson.practiceTask : "Bài tập thực hành"})`,
+        `  - 7 phút:  Tự kiểm tra (Self-check & ghi Sổ lỗi)`,
+        `  - 3 phút:  Đúc kết & Kế hoạch phiên tiếp theo`,
+      );
+    }
   }
 
   if (due.dueCount > 0) {
@@ -269,6 +449,20 @@ export async function getTodayPlan(options: TodayOptions): Promise<TodayResult> 
     });
   } else {
     lines.push("", "Mục ôn tập: Không có mục nào bị quá hạn.");
+  }
+
+  if (vegaCardsLoad) {
+    lines.push("");
+    if (vegaCardsLoad.dueCount > 0) {
+      const subjectPart = vegaCardsLoad.hasSubjectCards
+        ? ` (${vegaCardsLoad.subjectDueCount} thẻ thuộc môn này)`
+        : "";
+      lines.push(
+        `Thẻ nhớ Vega FSRS: ${vegaCardsLoad.dueCount} thẻ đến hạn hôm nay${subjectPart} · Bước tiếp theo: vega_sync, then vega_session to review`,
+      );
+    } else {
+      lines.push("Thẻ nhớ Vega FSRS: 0 thẻ đến hạn.");
+    }
   }
 
   if (nextLesson) {
@@ -293,6 +487,8 @@ export async function getTodayPlan(options: TodayOptions): Promise<TodayResult> 
     minutes,
     subjectTitle,
     dueReviewsCount: due.dueCount,
+    vegaDueCount: vegaCardsLoad?.dueCount,
+    vegaSubjectDueCount: vegaCardsLoad?.subjectDueCount,
     nextLesson,
     dynamicGoalMarkdown,
     written,

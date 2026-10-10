@@ -6,9 +6,9 @@ import { homedir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const VERSION = "0.3.2";
+export const VERSION = "0.3.3";
 export const PKG_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-export const UA = `Polaris/0.3.2 (personal study course builder; https://github.com/DuongNAD) Node.js/${process.versions.node}`;
+export const UA = `Polaris/0.3.3 (personal study course builder; https://github.com/DuongNAD) Node.js/${process.versions.node}`;
 
 export function hubDir(): string {
   return resolve(process.env.POLARIS_HUB ?? "D:/02_Learning_Knowledge");
