@@ -2,6 +2,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { notifySmartDrive } from "./smartdrive.js";
 import {
   atomicWriteFile,
   fetchWithRetry,
@@ -751,6 +752,7 @@ export async function captureSources(
 
   if (captured.length > 0) {
     await writeJson(p.sourcesJson, allSources);
+    notifySmartDrive(p.polarisDir);
   }
 
   return { captured, errors };

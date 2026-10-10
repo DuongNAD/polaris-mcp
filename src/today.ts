@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   type CourseMap,
   type ProgressState,
@@ -10,6 +10,7 @@ import {
 } from "./schema.js";
 import { getProfile, readBrief, readRoadmap } from "./store.js";
 import { getDueReviews } from "./tracking.js";
+import { notifySmartDrive } from "./smartdrive.js";
 import {
   atomicWriteFile,
   dayOfWeekEn,
@@ -232,6 +233,7 @@ export async function getTodayPlan(options: TodayOptions): Promise<TodayResult> 
 
     const finalOutput = isCrlf ? updatedContent.replace(/\n/g, "\r\n") : updatedContent;
     await atomicWriteFile(activeLearningFile, finalOutput);
+    notifySmartDrive(dirname(activeLearningFile));
     written = true;
   }
 

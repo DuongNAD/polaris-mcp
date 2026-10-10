@@ -18,6 +18,7 @@ import {
   readRoadmap,
   readSources,
 } from "./store.js";
+import { notifySmartDrive } from "./smartdrive.js";
 import {
   atomicWriteFile,
   readJson,
@@ -307,6 +308,9 @@ export async function exportCourse(options: ExportCourseOptions): Promise<Export
     ...outlinesGenerated.map((o) => `  - Created: ${o}`),
     ...outlinesPreserved.map((o) => `  - Existing outline preserved; wrote new candidate to: ${o}`),
   ];
+
+  notifySmartDrive(p.polarisDir);
+  notifySmartDrive(targetCourseDir);
 
   return {
     courseJsonPath: existingCoursePath,

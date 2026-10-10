@@ -10,6 +10,7 @@ import {
   validateSource,
 } from "./schema.js";
 import { readBrief, readSources } from "./store.js";
+import { notifySmartDrive } from "./smartdrive.js";
 import {
   atomicWriteFile,
   fetchWithRetry,
@@ -980,8 +981,12 @@ export async function runResearch(
   items: ResearchItem[];
   autoAdded: Source[];
   autoErrors: string[];
+  legacyCacheDetected: boolean;
+  legacyCachePath: string;
 }> {
   const p = subjectPaths(subjectDir);
+  const legacyCacheDetected = existsSync(p.legacyCacheDir);
+  const legacyCachePath = p.legacyCacheDir;
   await mkdir(p.researchDir, { recursive: true });
   await mkdir(p.cacheDir, { recursive: true });
 
@@ -1171,11 +1176,15 @@ export async function runResearch(
     }
   }
 
+  notifySmartDrive(p.polarisDir);
+
   return {
     shortlistPath,
     shortlistMarkdown: md,
     items: ranked,
     autoAdded,
     autoErrors,
+    legacyCacheDetected,
+    legacyCachePath,
   };
 }

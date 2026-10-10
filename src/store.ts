@@ -17,6 +17,7 @@ import {
   type Roadmap,
   type Source,
 } from "./schema.js";
+import { notifySmartDrive } from "./smartdrive.js";
 import { atomicWriteFile, profilePath, readJson, slugify, subjectPaths, todayIso, writeJson } from "./util.js";
 
 /* ───────── Default Learner Profile ───────── */
@@ -147,6 +148,8 @@ export async function initSubject(
   const check = checkQualityGates({ brief });
   const issues = [...check.errors.map((e) => `ERROR (${e.location}): ${e.message}`), ...check.warnings.map((w) => `WARN (${w.location}): ${w.message}`)];
 
+  notifySmartDrive(p.polarisDir);
+
   return { brief, paths: p, issues };
 }
 
@@ -239,6 +242,7 @@ export async function addSources(
   if (added.length > 0) {
     const updated = [...current, ...added];
     await writeJson(p.sourcesJson, updated);
+    notifySmartDrive(p.polarisDir);
   }
 
   return { added, existing: existingMatches, previews, errors };
@@ -288,6 +292,7 @@ export async function updateSources(
 
   if (updatedList.length > 0) {
     await writeJson(p.sourcesJson, all);
+    notifySmartDrive(p.polarisDir);
   }
 
   return { updated: updatedList, errors };
@@ -352,6 +357,7 @@ export async function addFacts(
   if (added.length > 0) {
     const updated = [...current, ...added];
     await writeJson(p.factsJson, updated);
+    notifySmartDrive(p.polarisDir);
   }
 
   return { added, errors };
@@ -435,6 +441,8 @@ export async function saveRoadmap(
   const relativePath = targetMdPath.replace(/\\/g, "/").replace(p.dir.replace(/\\/g, "/") + "/", "");
   const md = renderRoadmapMarkdown({ roadmap, brief, sources, facts, relativePath });
   await atomicWriteFile(targetMdPath, md);
+
+  notifySmartDrive(p.polarisDir);
 
   return {
     roadmap,

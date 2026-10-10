@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   ErrorLogEntryInputSchema,
   validateReviewsData,
@@ -13,6 +13,7 @@ import {
   type ReviewsData,
 } from "./schema.js";
 import { getProfile } from "./store.js";
+import { notifySmartDrive } from "./smartdrive.js";
 import {
   addDays,
   atomicWriteFile,
@@ -47,6 +48,7 @@ export async function appendErrorLogChunk(errorlogPath: string, chunk: string): 
   }
   const updatedErrorLog = existingErrorLog.trimEnd() + "\n\n" + chunk;
   await atomicWriteFile(errorlogPath, updatedErrorLog);
+  notifySmartDrive(dirname(errorlogPath));
 }
 
 export async function addQuizErrorLogEntry(
@@ -133,6 +135,7 @@ export async function addQuizErrorLogEntry(
   reviewsData.items.push(reviewItem);
   reviewsData.updated = todayIso();
   await writeJson(p.reviewsJson, reviewsData);
+  notifySmartDrive(p.polarisDir);
 
   return { entryId, summary: `Câu hỏi: ${event.question} -> Đáp án đúng: ${answerDisplay}` };
 }
@@ -201,6 +204,7 @@ export async function addPredictErrorLogEntry(
   reviewsData.items.push(reviewItem);
   reviewsData.updated = todayIso();
   await writeJson(p.reviewsJson, reviewsData);
+  notifySmartDrive(p.polarisDir);
 
   return { entryId, summary: `Lệch dự đoán: ${event.title}` };
 }
@@ -270,6 +274,7 @@ export async function addRecallErrorLogEntry(
   reviewsData.items.push(reviewItem);
   reviewsData.updated = todayIso();
   await writeJson(p.reviewsJson, reviewsData);
+  notifySmartDrive(p.polarisDir);
 
   return { entryId, summary: `Quên trạm ${event.station} (${event.place}) -> ${event.item}` };
 }
@@ -343,6 +348,7 @@ export async function addErrorLogEntry(
   reviewsData.items.push(reviewItem);
   reviewsData.updated = todayIso();
   await writeJson(p.reviewsJson, reviewsData);
+  notifySmartDrive(p.polarisDir);
 
   const lines = [
     `Ghi nhận thành công vào Sổ lỗi: ${p.errorlogMd}`,
@@ -421,6 +427,7 @@ export async function markLessonDone(
 
   reviewsData.updated = todayIso();
   await writeJson(p.reviewsJson, reviewsData);
+  notifySmartDrive(p.polarisDir);
 
   const lines = [
     `Đã ghi nhận hoàn thành bài học "${lessonDir}" vào ngày ${completedDate}.`,

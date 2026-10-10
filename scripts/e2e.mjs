@@ -34,8 +34,25 @@ const polarisLib = await import(pathToFileURL(join(ROOT, "dist", "polaris.mjs"))
 
 const TEST_DIR = join(tmpdir(), `polaris_e2e_${Date.now()}`);
 const SUBJECT_DIR = join(TEST_DIR, "ai_agents_course");
+const CACHE_DIR = join(TEST_DIR, "global_cache");
+const SMARTDRIVE_LOG = join(TEST_DIR, "smartdrive.log");
+const SMARTDRIVE_SCRIPT = join(TEST_DIR, "smartdrive_mock.mjs");
 rmSync(TEST_DIR, { recursive: true, force: true });
 mkdirSync(SUBJECT_DIR, { recursive: true });
+mkdirSync(CACHE_DIR, { recursive: true });
+
+writeFileSync(
+  SMARTDRIVE_SCRIPT,
+  `import { appendFileSync } from "node:fs";
+const logPath = process.argv[2];
+const args = process.argv.slice(3).join(" ");
+appendFileSync(logPath, args + "\\n", "utf8");
+`,
+  "utf8",
+);
+
+process.env.POLARIS_CACHE_DIR = CACHE_DIR;
+process.env.POLARIS_SMARTDRIVE_CMD = `node "${SMARTDRIVE_SCRIPT}" "${SMARTDRIVE_LOG}"`;
 
 let failed = 0;
 const ok = (name, cond, detail = "") => {
@@ -159,6 +176,11 @@ const transport = new StdioClientTransport({
   command: process.execPath,
   args: [join(ROOT, "dist", "polaris.mjs")],
   stderr: "inherit",
+  env: {
+    ...process.env,
+    POLARIS_CACHE_DIR: CACHE_DIR,
+    POLARIS_SMARTDRIVE_CMD: `node "${SMARTDRIVE_SCRIPT}" "${SMARTDRIVE_LOG}"`,
+  },
 });
 
 await client.connect(transport);
@@ -290,6 +312,36 @@ try {
         shortlistMd.includes("| Rank | Title | Kind | Year | Citations | Open Access | Score | Reasons | Link |"),
     );
   }
+
+  // Verify cache written to POLARIS_CACHE_DIR and none under subject polaris/.cache
+  const cacheSubdirs = existsSync(CACHE_DIR) ? readdirSync(CACHE_DIR) : [];
+  ok(
+    "research writes cache files to POLARIS_CACHE_DIR",
+    cacheSubdirs.length > 0,
+    `cache subdirs in ${CACHE_DIR}: ${cacheSubdirs.join(", ")}`,
+  );
+  ok(
+    "no cache files written under subject polaris/.cache",
+    !existsSync(join(SUBJECT_DIR, "polaris", ".cache")),
+  );
+
+  // Test legacy cache folder detection notice
+  const legacyDir = join(SUBJECT_DIR, "polaris", ".cache");
+  mkdirSync(legacyDir, { recursive: true });
+  writeFileSync(join(legacyDir, "old_test.json"), JSON.stringify({ old: true }), "utf8");
+  const rLegacy = await call("polaris_research", {
+    subject_dir: SUBJECT_DIR,
+    module: "M1",
+    queries: ["ReAct agents reasoning"],
+    providers: ["arxiv"],
+    per_provider: 1,
+  });
+  ok(
+    "polaris_research warns once if old polaris/.cache folder exists",
+    !rLegacy.isError && textOf(rLegacy).includes("Storage notice") && textOf(rLegacy).includes(".cache"),
+    "warned about legacy cache",
+  );
+  rmSync(legacyDir, { recursive: true, force: true });
 
   // 3.6 polaris_source_add: local file and web fixture
   r = await call("polaris_source_add", {
@@ -465,6 +517,51 @@ try {
   ok("roadmap_save succeeds and renders ROADMAP.md", !r.isError && textOf(r).includes("Roadmap saved"));
   const roadmapMdPath = join(SUBJECT_DIR, "04_Roadmaps", "ROADMAP.md");
   ok("ROADMAP.md exists on disk", existsSync(roadmapMdPath));
+
+  // 3.11b SmartDrive update notification verification & coalescing
+  // Clear log before the test
+  writeFileSync(SMARTDRIVE_LOG, "", "utf8");
+
+  // Perform source_add and roadmap_save within 2s window
+  await call("polaris_source_add", {
+    subject_dir: SUBJECT_DIR,
+    sources: [
+      {
+        id: "S_coalesce",
+        kind: "local",
+        title: "Coalesce Test Note",
+        path: localNotePath,
+        label: "course",
+      },
+    ],
+  });
+  await call("polaris_roadmap_save", { subject_dir: SUBJECT_DIR, roadmap: validRoadmap });
+
+  // Wait for 2s coalescing window to settle and fire trailing update
+  await new Promise((res) => setTimeout(res, 2200));
+  const sdLogContent = existsSync(SMARTDRIVE_LOG) ? readFileSync(SMARTDRIVE_LOG, "utf8") : "";
+  const sdLogLines = sdLogContent.trim().split("\n").filter(Boolean);
+  ok(
+    "SmartDrive update hook invoked with update <dir> --quiet",
+    sdLogLines.some((l) => l.startsWith("update ") && l.endsWith("--quiet") && l.includes("polaris")),
+    `Logged lines: ${sdLogLines.join(" | ")}`,
+  );
+  ok(
+    "source_add and roadmap_save produce coalesced update <subject>/polaris --quiet lines",
+    sdLogLines.length >= 1 && sdLogLines.length <= 2,
+    `Coalesced line count: ${sdLogLines.length}`,
+  );
+
+  // Test POLARIS_SMARTDRIVE=off disables hook
+  process.env.POLARIS_SMARTDRIVE = "off";
+  polarisLib._resetSmartDriveState();
+  writeFileSync(SMARTDRIVE_LOG, "", "utf8");
+  polarisLib.notifySmartDrive(SUBJECT_DIR);
+  await new Promise((res) => setTimeout(res, 200));
+  const disabledLog = existsSync(SMARTDRIVE_LOG) ? readFileSync(SMARTDRIVE_LOG, "utf8") : "";
+  ok("POLARIS_SMARTDRIVE=off logs nothing", disabledLog.trim().length === 0, `Log length: ${disabledLog.length}`);
+  delete process.env.POLARIS_SMARTDRIVE;
+  polarisLib._resetSmartDriveState();
 
   // 3.12 polaris_check
   r = await call("polaris_check", { subject_dir: SUBJECT_DIR });
@@ -919,7 +1016,7 @@ try {
   ok("CLI today", todayCli.includes("Kế hoạch phiên học") && todayCli.includes("## Today's Dynamic Goal"));
 
   const versionCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "version"], { encoding: "utf8" });
-  ok("CLI version 0.3.1", versionCli.trim() === "0.3.1");
+  ok("CLI version 0.3.2", versionCli.trim() === "0.3.2");
 
   const helpCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "help"], { encoding: "utf8" });
   ok("CLI help", helpCli.includes("Usage: node polaris.mjs") && helpCli.includes("progress <subject_dir>") && helpCli.includes("today <subject_dir>"));

@@ -61,6 +61,7 @@ export * from "./tasks.js";
 export * from "./tracking.js";
 export * from "./progress.js";
 export * from "./today.js";
+export * from "./smartdrive.js";
 export * from "./util.js";
 
 type Content = { type: "text"; text: string };
@@ -240,7 +241,7 @@ async function startMcp(): Promise<void> {
     {
       title: "Run multi-query research investigation",
       description:
-        "Execute a multi-query research hunt across providers with rate limits, 24h caching in polaris/.cache/, de-duplication, and ranking. Generates shortlist file polaris/research/<yyyy-mm-dd>-<slug>.md. Optionally auto-adds and captures top N sources.",
+        "Execute a multi-query research hunt across providers with rate limits, 24h caching in polaris cache directory, de-duplication, and ranking. Generates shortlist file polaris/research/<yyyy-mm-dd>-<slug>.md. Optionally auto-adds and captures top N sources.",
       inputSchema: {
         subject_dir: z.string().min(1).describe("Subject directory path"),
         module: z.string().optional().describe("Target module ID e.g. 'M1'"),
@@ -290,6 +291,13 @@ async function startMcp(): Promise<void> {
 
         if (res.autoErrors.length > 0) {
           lines.push("", "Auto-add warnings/errors:", ...res.autoErrors.map((e) => `  - ${e}`));
+        }
+
+        if (res.legacyCacheDetected) {
+          lines.push(
+            "",
+            `Storage notice: Legacy cache folder detected at "${res.legacyCachePath}". Polaris now stores regenerable API cache in "${subjectPaths(subject_dir).cacheDir}". The legacy folder is no longer used and can safely be deleted.`,
+          );
         }
 
         if (!auto_add || auto_add === 0) {

@@ -11,6 +11,7 @@ import {
   readBrief,
   readRoadmap,
 } from "./store.js";
+import { notifySmartDrive } from "./smartdrive.js";
 import {
   atomicWriteFile,
   readJson,
@@ -169,6 +170,7 @@ export async function syncTasks(subjectDir: string): Promise<TasksSyncResult> {
 
     tasksMapData.updated = todayIso();
     await writeJson(p.tasksMapJson, tasksMapData);
+    notifySmartDrive(p.polarisDir);
   }
 
   const lines = [

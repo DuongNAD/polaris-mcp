@@ -21,6 +21,7 @@ import {
   readSources,
   saveRoadmap,
 } from "./store.js";
+import { notifySmartDrive } from "./smartdrive.js";
 import {
   addDays,
   atomicWriteFile,
@@ -463,6 +464,7 @@ export async function buildSchedule(options: ScheduleOptions): Promise<ScheduleR
 
   // Write schedule.json
   await writeJson(p.scheduleJson, scheduleData);
+  notifySmartDrive(p.polarisDir);
 
   // Save roadmap & re-render ROADMAP.md
   const saveRes = await saveRoadmap(subject_dir, updatedRoadmap);

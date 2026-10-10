@@ -36,7 +36,7 @@ Sister project to [Aurora Slides MCP](https://github.com/DuongNAD/aurora-slides-
 │       └── course.json      # Aurora Slides course specification
 ├── TASKS.md                 # Subject tasks (synced under '## Polaris')
 └── polaris/
-    ├── .gitignore           # Ignores captures/ and .cache/
+    ├── .gitignore           # Ignores captures/ and legacy .cache/
     ├── brief.json           # Subject, goal, measurable outcomes with check criteria, hoursPerWeek
     ├── sources.json         # Registry of primary course materials, papers, web pages, local files
     ├── facts.json           # Discrete factual claims with locators and source IDs
@@ -46,7 +46,6 @@ Sister project to [Aurora Slides MCP](https://github.com/DuongNAD/aurora-slides-
     ├── tasks-map.json       # Synced task ID to hub task mapping (duplicate prevention)
     ├── reviews.json         # Spaced review tracking schedule (D+1, D+3, D+7, D+16, D+35)
     ├── errorlog.md          # Learner error log ("Sổ lỗi") with predict-gap reviews
-    ├── .cache/              # 24-hour search query cache (git-ignored)
     ├── research/            # Generated research shortlist files (e.g. 2026-10-10-ai-agents.md)
     ├── captures/            # Full-text extractions of web pages, arXiv PDFs, and YouTube transcripts (git-ignored)
     │   ├── S1.md
@@ -56,7 +55,9 @@ Sister project to [Aurora Slides MCP](https://github.com/DuongNAD/aurora-slides-
         └── 02-kien-truc.outline.md
 ```
 
-## Tools (v0.3.1)
+> **Note on API Cache:** Regenerable search API responses (24h TTL) are stored in the global cache directory (`%LOCALAPPDATA%/polaris/cache` or `POLARIS_CACHE_DIR`), saving space on exFAT drives.
+
+## Tools (v0.3.2)
 
 Polaris exposes 20 specialized MCP tools across 5 major functional domains:
 
@@ -301,10 +302,34 @@ node dist/polaris.mjs help
 - **Roadmap:** Every brief outcome is covered; modules have `why`, ≥ 2 outputs, core points citing facts, ≥ 1 misconception with fix, materials fitting module hours, 3 practice tiers (`warmup`, `core`, `challenge`) with DoD, ≥ 4 self-check questions with predict questions when code is present, checkpoints, and no circular dependency cycles.
 - **Language:** Flags absolute overclaims ("100%", "luôn luôn", "tuyệt đối", "always", "every model").
 
+## Works with SmartDrive-OS
+
+Polaris integrates seamlessly with [SmartDrive-OS](https://github.com/DuongNAD/smart-drive-os) (sister project indexing drives and knowledge hubs):
+
+1. **exFAT SSD Optimization & Global API Cache:**
+   - On exFAT drives with large clusters (e.g. 512 KB), thousands of small temporary JSON response files waste hundreds of megabytes in cluster slack space.
+   - Polaris stores regenerable 24-hour API research caches outside the subject workspace in a dedicated global cache directory:
+     - `POLARIS_CACHE_DIR` (if set)
+     - Windows: `%LOCALAPPDATA%/polaris/cache/<subject_hash>`
+     - macOS/Linux: `$XDG_CACHE_HOME/polaris/<subject_hash>` or `~/.cache/polaris/<subject_hash>`
+   - Captures (`captures/`) remain inside the subject folder because they are permanent study materials.
+   - Any legacy `polaris/.cache` folder inside a subject workspace is left untouched, no longer written to, and flagged with a notice during research suggesting it can be safely deleted.
+
+2. **Automatic Index Hook:**
+   - Polaris fires a non-blocking, detached background update hook (`smart-drive update <dir> --quiet`) after writes to `<subject>/polaris` (brief, sources, facts, roadmap, research shortlists, captures, error log, lesson outlines, reviews, progress sync) and to exported Aurora course folders.
+   - Command resolution:
+     - `POLARIS_SMARTDRIVE_CMD` (custom command array, e.g. `smart-drive` or `py -3.11 -m smart_drive`)
+     - `smart-drive` on `PATH`
+     - Windows fallback: `py -3 -m smart_drive` or `python -m smart_drive`
+     - Unix fallback: `python3 -m smart_drive` or `python -m smart_drive`
+   - Spawns detached with a 60-second execution timeout, ignores errors silently (logs at most once), and coalesces notifications per folder within a 2-second window.
+   - To disable notifications completely, set `POLARIS_SMARTDRIVE=off`.
+
 ## Version History
 
 | Version | Description |
 |---|---|
+| **0.3.2** | Fit learner's exFAT SSD and SmartDrive-OS: Moved 24h regenerable API cache off subject folders to global cache (%LOCALAPPDATA%/polaris/cache or POLARIS_CACHE_DIR) with legacy cache cleanup notice; added non-blocking detached SmartDrive update hooks with per-folder 2s coalescing, POLARIS_SMARTDRIVE=off, and POLARIS_SMARTDRIVE_CMD. |
 | **0.3.1** | Meaningful error-log entries in Sổ lỗi for Aurora 0.6.1 progress sync: Quiz option texts (chosenText/answerText), explanations, learner reflection prompts in "Nguyên nhân gốc rễ", "Bài học rút ra", and "Neo" hooks. |
 | **0.3.0** | Closed-loop integration with Aurora Slides: `polaris_progress_sync` (ingesting quiz, predict, recall, complete events into Sổ lỗi & spaced reviews), `polaris_today` (daily session planner & Active Learning Hub updater), `review` prompt, `progress` and `aurora` guide topics. |
 | **0.2.0** | Autonomous research discovery engine across 8 keyless providers (OpenAlex, arXiv, Semantic Scholar, CrossRef, Wikipedia, GitHub, YouTube, Brave), ranking with transparent evaluation reasons, 24h caching, Review Gate, and full-text capture tools. |

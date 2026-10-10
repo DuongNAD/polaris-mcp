@@ -6,12 +6,24 @@ import { homedir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const VERSION = "0.3.1";
+export const VERSION = "0.3.2";
 export const PKG_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-export const UA = `Polaris/0.3.1 (personal study course builder; https://github.com/DuongNAD) Node.js/${process.versions.node}`;
+export const UA = `Polaris/0.3.2 (personal study course builder; https://github.com/DuongNAD) Node.js/${process.versions.node}`;
 
 export function hubDir(): string {
   return resolve(process.env.POLARIS_HUB ?? "D:/02_Learning_Knowledge");
+}
+
+export function defaultCacheRoot(): string {
+  if (process.env.POLARIS_CACHE_DIR && process.env.POLARIS_CACHE_DIR.trim()) {
+    return resolve(process.env.POLARIS_CACHE_DIR.trim());
+  }
+  if (process.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local");
+    return join(localAppData, "polaris", "cache");
+  }
+  const xdg = process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache");
+  return join(xdg, "polaris");
 }
 
 export function profilePath(hub?: string): string {
@@ -36,6 +48,7 @@ export interface SubjectPaths {
   researchDir: string;
   lessonsDir: string;
   cacheDir: string;
+  legacyCacheDir: string;
   gitignore: string;
   defaultRoadmapMd: string;
   tasksMd: string;
@@ -50,6 +63,9 @@ export function subjectPaths(target: string): SubjectPaths {
     dir = dirname(abs);
   }
   const polarisDir = join(dir, "polaris");
+  const subjectHash = hash(dir, 16);
+  const cacheDir = join(defaultCacheRoot(), subjectHash);
+  const legacyCacheDir = join(polarisDir, ".cache");
   return {
     dir,
     polarisDir,
@@ -66,7 +82,8 @@ export function subjectPaths(target: string): SubjectPaths {
     capturesDir: join(polarisDir, "captures"),
     researchDir: join(polarisDir, "research"),
     lessonsDir: join(polarisDir, "lessons"),
-    cacheDir: join(polarisDir, ".cache"),
+    cacheDir,
+    legacyCacheDir,
     gitignore: join(polarisDir, ".gitignore"),
     defaultRoadmapMd: join(dir, "04_Roadmaps", "ROADMAP.md"),
     tasksMd: join(dir, "TASKS.md"),

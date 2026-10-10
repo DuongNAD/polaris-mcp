@@ -36,7 +36,7 @@ Dự án song hành cùng [Aurora Slides MCP](https://github.com/DuongNAD/aurora
 │       └── course.json      # Khóa học Aurora Slides
 ├── TASKS.md                 # Tác vụ của môn học (đồng bộ dưới mục '## Polaris')
 └── polaris/
-    ├── .gitignore           # Bỏ qua captures/ và .cache/
+    ├── .gitignore           # Bỏ qua captures/ và .cache/ cũ
     ├── brief.json           # Mục tiêu, đầu ra kiểm tra được, số giờ/tuần, nguồn sự thật
     ├── sources.json         # Sổ đăng ký nguồn tài liệu (video, bài báo, trang web, ghi chú)
     ├── facts.json           # Các sự thật được trích xuất kèm định vị và ID nguồn
@@ -46,7 +46,6 @@ Dự án song hành cùng [Aurora Slides MCP](https://github.com/DuongNAD/aurora
     ├── tasks-map.json       # Bản đồ ánh xạ task ID với TASKS.md (chống trùng lặp)
     ├── reviews.json         # Lịch ôn tập ngắt quãng (D+1, D+3, D+7, D+16, D+35)
     ├── errorlog.md          # Sổ lỗi người học với chu kỳ ôn tập các khoảng cách dự đoán
-    ├── .cache/              # Bộ nhớ đệm tìm kiếm 24 giờ (git-ignored)
     ├── research/            # Các file danh sách rút gọn tài liệu (vd: 2026-10-10-ai-agents.md)
     ├── captures/            # Bản trích xuất toàn văn từ web/arXiv/YouTube (git-ignored)
     │   ├── S1.md
@@ -56,7 +55,9 @@ Dự án song hành cùng [Aurora Slides MCP](https://github.com/DuongNAD/aurora
         └── 02-kien-truc.outline.md
 ```
 
-## Danh sách công cụ (v0.3.1)
+> **Ghi chú về Cache API:** Toàn bộ dữ liệu bộ nhớ đệm tìm kiếm API 24 giờ được lưu tập trung tại cache hệ thống (`%LOCALAPPDATA%/polaris/cache` hoặc `POLARIS_CACHE_DIR`), giúp tiết kiệm dung lượng cụm đĩa exFAT.
+
+## Danh sách công cụ (v0.3.2)
 
 Polaris cung cấp 20 công cụ MCP chia theo 5 nhóm chức năng:
 
@@ -301,10 +302,34 @@ node dist/polaris.mjs help
 - **Roadmap:** Mọi outcome trong brief đều được bao phủ; các module có đầy đủ `why`, ≥ 2 `outputs`, `core` dẫn chứng facts, ≥ 1 `misconception` kèm fix, thời lượng tài liệu khớp thời gian module, 3 tầng thực hành (`warmup`, `core`, `challenge`) kèm DoD, ≥ 4 câu hỏi `selfCheck` (kèm câu hỏi `predict` khi có code), `checkpoint` rõ ràng, và không bị phụ thuộc vòng tròn.
 - **Language:** Phát hiện các khẳng định tuyệt đối quá đà ("100%", "luôn luôn", "tuyệt đối", "always", "every model").
 
+## Tích hợp với SmartDrive-OS (Works with SmartDrive-OS)
+
+Polaris hoạt động liền mạch cùng [SmartDrive-OS](https://github.com/DuongNAD/smart-drive-os) (dự án chị em lập chỉ mục ổ đĩa và kho tri thức học tập):
+
+1. **Tối ưu hóa ổ đĩa exFAT & Di chuyển bộ nhớ đệm API ra ngoài:**
+   - Trên các ổ SSD định dạng exFAT với kích thước cụm (cluster size) lớn (ví dụ 512 KB), việc lưu nhiều file JSON nhỏ tạm thời của kết quả tìm kiếm API gây lãng phí dung lượng rất lớn.
+   - Polaris chuyển toàn bộ cache tìm kiếm 24h ra ngoài thư mục môn học, lưu tại thư mục cache hệ thống:
+     - Biến môi trường `POLARIS_CACHE_DIR` (nếu có cấu hình)
+     - Windows: `%LOCALAPPDATA%/polaris/cache/<subject_hash>`
+     - macOS/Linux: `$XDG_CACHE_HOME/polaris/<subject_hash>` hoặc `~/.cache/polaris/<subject_hash>`
+   - Các bản trích xuất tài liệu (`captures/`) vẫn được lưu trong thư mục môn học vì đây là tài liệu học tập lâu dài.
+   - Nếu tồn tại thư mục cache cũ `polaris/.cache` trong môn học, Polaris sẽ giữ nguyên, không ghi đè thêm và hiển thị thông báo trong kết quả `polaris_research` gợi ý người học có thể xóa an toàn.
+
+2. **Hook cập nhật chỉ mục tự động:**
+   - Polaris tự động kích hoạt hook ngầm không chặn (`smart-drive update <dir> --quiet`) sau mỗi lần ghi vào `<subject>/polaris` (brief, sources, facts, roadmap, research shortlist, captures, error log, lesson outlines, reviews, progress sync) và thư mục slide Aurora xuất ra.
+   - Cơ chế tìm lệnh:
+     - Biến môi trường `POLARIS_SMARTDRIVE_CMD` (mảng đối số tùy chỉnh)
+     - Lệnh `smart-drive` trên biến môi trường `PATH`
+     - Trên Windows: fallback sang `py -3 -m smart_drive` hoặc `python -m smart_drive`
+     - Trên Unix: fallback sang `python3 -m smart_drive` hoặc `python -m smart_drive`
+   - Tiến trình chạy tách biệt (detached), tự hủy sau 60 giây timeout, bỏ qua lỗi (ghi log tối đa 1 lần), và gộp yêu cầu cập nhật theo từng thư mục trong khoảng 2 giây (coalesced within 2s).
+   - Đặt `POLARIS_SMARTDRIVE=off` để tắt hoàn toàn hook này.
+
 ## Lịch sử phiên bản
 
 | Phiên bản | Mô tả |
 |---|---|
+| **0.3.2** | Tương thích ổ exFAT SSD và SmartDrive-OS: Di chuyển bộ nhớ đệm API tìm kiếm 24h ra ngoài thư mục môn học về cache hệ thống (%LOCALAPPDATA%/polaris/cache hoặc POLARIS_CACHE_DIR) kèm thông báo dọn dẹp cache cũ; thêm hook tự động báo SmartDrive cập nhật chỉ mục (coalesced 2s, POLARIS_SMARTDRIVE=off, POLARIS_SMARTDRIVE_CMD). |
 | **0.3.1** | Cải tiến Sổ lỗi khi đồng bộ tiến độ Aurora 0.6.1: Hiển thị văn bản phương án trắc nghiệm (chosenText/answerText), giải thích (explanation), gợi ý tự điền cho "Nguyên nhân gốc rễ", "Bài học rút ra" và "Neo" ghi nhớ. |
 | **0.3.0** | Tích hợp vòng lặp học tập khép kín cùng Aurora Slides: `polaris_progress_sync` (nạp sự kiện quiz, predict, recall, complete vào Sổ lỗi & lịch ôn tập), `polaris_today` (lập kế hoạch buổi học & cập nhật Active Learning Hub), prompt `review`, bổ sung chủ đề hướng dẫn `progress` và `aurora`. |
 | **0.2.0** | Tích hợp bộ máy nghiên cứu & tìm kiếm tự động qua 8 nhà cung cấp không cần API key (OpenAlex, arXiv, Semantic Scholar, CrossRef, Wikipedia, GitHub, YouTube, Brave), chấm điểm minh bạch kèm lý do đánh giá, bộ nhớ đệm 24h, cổng duyệt tài liệu (Review Gate) và công cụ trích xuất toàn văn. |

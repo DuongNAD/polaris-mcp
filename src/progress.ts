@@ -18,6 +18,7 @@ import {
   getDueReviews,
   markLessonDone,
 } from "./tracking.js";
+import { notifySmartDrive } from "./smartdrive.js";
 import {
   hash,
   readJson,
@@ -362,6 +363,10 @@ export async function syncProgress(options: ProgressSyncOptions): Promise<Progre
     },
   };
   await writeJson(p.progressStateJson, updatedState);
+  notifySmartDrive(p.polarisDir);
+  if (existsSync(targetCourseDir)) {
+    notifySmartDrive(targetCourseDir);
+  }
 
   // Query reviews due today
   const due = await getDueReviews(subject_dir, todayIso());
