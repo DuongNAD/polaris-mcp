@@ -13,6 +13,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { captureSources } from "./capture.js";
 import { checkQualityGates } from "./check.js";
+import { exportCourse } from "./export.js";
 import { guideText, TOPICS } from "./guide.js";
 import { renderRoadmapMarkdown } from "./render.js";
 import {
@@ -21,6 +22,7 @@ import {
   ResearchProvider,
   runResearch,
 } from "./research.js";
+import { buildSchedule } from "./schedule.js";
 import {
   addFacts,
   addSources,
@@ -36,6 +38,12 @@ import {
   updateProfile,
   updateSources,
 } from "./store.js";
+import { syncTasks } from "./tasks.js";
+import {
+  addErrorLogEntry,
+  getDueReviews,
+  markLessonDone,
+} from "./tracking.js";
 import { errMsg, subjectPaths, VERSION } from "./util.js";
 
 export * from "./schema.js";
@@ -45,6 +53,10 @@ export * from "./check.js";
 export * from "./render.js";
 export * from "./guide.js";
 export * from "./research.js";
+export * from "./schedule.js";
+export * from "./export.js";
+export * from "./tasks.js";
+export * from "./tracking.js";
 export * from "./util.js";
 
 type Content = { type: "text"; text: string };
@@ -63,11 +75,11 @@ async function safe(fn: () => Promise<ToolResult>): Promise<ToolResult> {
   }
 }
 
-const INSTRUCTIONS = `Polaris MCP builds evidence-based personal study courses for self-learners from brief to roadmap.
+const INSTRUCTIONS = `Polaris MCP builds evidence-based personal study courses for self-learners from brief to Aurora Slides course.
 
 Workflow:
-1. polaris_guide (topics: "overview", "pipeline", "gates", "sources", "roadmap", "research", "learner", "rules").
-2. polaris_profile { action: "get" } to read learner methods, or "update" to adjust preferences.
+1. polaris_guide (topics: "overview", "pipeline", "gates", "sources", "roadmap", "research", "schedule", "export", "tracking", "learner", "rules").
+2. polaris_profile { action: "get" } to read learner methods, slots, and blackouts.
 3. polaris_start { subject_dir, brief } to initialize subject brief and polaris folder.
 4. Research & Discovery:
    - polaris_find { query, providers?, limit?, year_from?, lang? } to discover materials across keyless providers.
@@ -77,17 +89,24 @@ Workflow:
 5. polaris_fact_add { subject_dir, facts } to record discrete factual claims with locators.
 6. polaris_roadmap_save { subject_dir, roadmap } to validate quality gates and render ROADMAP.md in Vietnamese.
 7. polaris_check { subject_dir } to verify that all quality gates pass.
+8. polaris_schedule { subject_dir, start?, interleave_every? } to deterministically fit module hours into learner slots minus blackouts and P0 deadlines, writing schedule.json and ROADMAP.md section 3.2.
+9. polaris_export_course { subject_dir, course_dir? } to write Aurora course.json and lesson outline skeletons in polaris/lessons/<dir>.outline.md.
+10. polaris_tasks_sync { subject_dir } to append scheduled lesson and checkpoint tasks to TASKS.md under ## Polaris.
+11. Tracking & Spaced Repetition:
+    - polaris_errorlog_add { subject_dir, entry } to log runtime prediction gaps in polaris/errorlog.md and schedule D+1, D+3, D+7, D+16, D+35 reviews.
+    - polaris_lesson_done { subject_dir, lesson_dir, score? } to record completion and schedule spaced reviews.
+    - polaris_review_due { subject_dir, date? } to query due reviews.
 
 Rules:
 - Evidence first: every factual bullet points to facts; every fact points to a source + locator (page [p. N], timestamp [mm:ss], section, lines).
 - Labels: [Khóa học] (learner source of truth), [Mở rộng] (extensions), (chưa xác minh) (unverified). Numbers and dates must be cross-checked or marked unverified.
 - Learner fit: learner-facing text in the learner's language (Vietnamese by default with correct diacritics); no emoji; no overclaims.
-- Review gate: show the top 10 research candidates with evaluation reasons and wait for approval unless auto_add is explicitly specified.
+- Review gate: show top research candidates with evaluation reasons and wait for approval unless auto_add is explicitly specified.
 - Do not write solution code for assignments; adhere to AGENTS.md rules.
 - Never scan D: recursively; open files directly or use smart-drive MCP.
 
 Done when:
-polaris_check reports 0 errors and ROADMAP.md is rendered with all 10 standard sections.`;
+polaris_check reports 0 errors, ROADMAP.md is rendered with all 10 standard sections, schedule and course.json are generated, and tasks are synced.`;
 
 async function startMcp(): Promise<void> {
   const server = new McpServer({ name: "polaris", version: VERSION }, { instructions: INSTRUCTIONS });
@@ -522,13 +541,154 @@ async function startMcp(): Promise<void> {
       }),
   );
 
+  /* 13. polaris_schedule */
+  server.registerTool(
+    "polaris_schedule",
+    {
+      title: "Schedule course sessions",
+      description:
+        "Deterministically fit module study hours into learner weekly slots from start date, skipping blackouts and hub P0 deadlines (day of & day before), inserting interleaved reviews every N weeks. Writes polaris/schedule.json and updates ROADMAP.md weekly table.",
+      inputSchema: {
+        subject_dir: z.string().min(1).describe("Subject directory path"),
+        start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "start must be YYYY-MM-DD").optional().describe("Start date (defaults to brief.start)"),
+        until: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "until must be YYYY-MM-DD").optional().describe("Latest end date"),
+        interleave_every: z.number().int().min(1).default(4).optional().describe("Interleaved review interval in weeks (default: 4)"),
+        hub: z.string().optional().describe("Hub path for reading P0 deadlines (defaults to POLARIS_HUB)"),
+      },
+      annotations: { destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ subject_dir, start, until, interleave_every, hub }) =>
+      safe(async () => {
+        const res = await buildSchedule({
+          subject_dir,
+          start,
+          until,
+          interleave_every,
+          hub,
+        });
+        return text(res.summary);
+      }),
+  );
+
+  /* 14. polaris_export_course */
+  server.registerTool(
+    "polaris_export_course",
+    {
+      title: "Export course to Aurora Slides",
+      description:
+        "Generate Aurora Slides course.json and lesson outline skeletons in polaris/lessons/<dir>.outline.md. Automatically splits long modules (> 2.5h) into a/b lessons, rotates visual themes, assigns Phosphor icons, and preserves existing customizations idempotently.",
+      inputSchema: {
+        subject_dir: z.string().min(1).describe("Subject directory path"),
+        course_dir: z.string().optional().describe("Target Aurora course directory (defaults to <subject>/05_Slides/<slug>)"),
+      },
+      annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ subject_dir, course_dir }) =>
+      safe(async () => {
+        const res = await exportCourse({ subject_dir, course_dir });
+        return text(res.summary);
+      }),
+  );
+
+  /* 15. polaris_tasks_sync */
+  server.registerTool(
+    "polaris_tasks_sync",
+    {
+      title: "Sync tasks to learning hub",
+      description:
+        "Append scheduled lesson tasks and module checkpoints under ## Polaris in <subject>/TASKS.md in exact hub format (- [ ] [Deadline: YYYY-MM-DD 23:59] [Priority: P2] ...). Preserves line endings and prevents duplicates.",
+      inputSchema: {
+        subject_dir: z.string().min(1).describe("Subject directory path"),
+      },
+      annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ subject_dir }) =>
+      safe(async () => {
+        const res = await syncTasks(subject_dir);
+        return text(res.summary);
+      }),
+  );
+
+  /* 16. polaris_errorlog_add */
+  server.registerTool(
+    "polaris_errorlog_add",
+    {
+      title: "Add error log entry ('Sổ lỗi')",
+      description:
+        "Record a runtime predict-vs-run gap in polaris/errorlog.md ('Sổ lỗi') and automatically schedule spaced repetition reviews (D+1, D+3, D+7, D+16, D+35) in polaris/reviews.json.",
+      inputSchema: {
+        subject_dir: z.string().min(1).describe("Subject directory path"),
+        entry: z.object({
+          date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD").optional(),
+          module: z.string().optional().describe("Module ID e.g. M1"),
+          lesson: z.string().optional().describe("Lesson dir e.g. 01-vong-lap-agent"),
+          prediction: z.string().optional().describe("Initial prediction before running"),
+          result: z.string().optional().describe("Actual runtime result / symptom"),
+          why: z.string().min(1).describe("Root cause of the error"),
+          fix: z.string().min(1).describe("Fix and general rule learned"),
+          source: z.string().optional().describe("Reference or source ID"),
+        }),
+        hub: z.string().optional(),
+      },
+      annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    },
+    async ({ subject_dir, entry, hub }) =>
+      safe(async () => {
+        const res = await addErrorLogEntry(subject_dir, entry, hub);
+        return text(res.summary);
+      }),
+  );
+
+  /* 17. polaris_lesson_done */
+  server.registerTool(
+    "polaris_lesson_done",
+    {
+      title: "Mark lesson completed",
+      description:
+        "Record lesson completion in polaris/reviews.json and schedule spaced repetition reviews (D+1, D+3, D+7, D+16, D+35) for retention.",
+      inputSchema: {
+        subject_dir: z.string().min(1).describe("Subject directory path"),
+        lesson_dir: z.string().min(1).describe("Lesson folder name e.g. '01-vong-lap-agent'"),
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD").optional().describe("Completion date (default today)"),
+        score: z.union([z.number(), z.string()]).optional().describe("Quiz score or assessment result"),
+        hub: z.string().optional(),
+      },
+      annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    },
+    async ({ subject_dir, lesson_dir, date, score, hub }) =>
+      safe(async () => {
+        const res = await markLessonDone(subject_dir, lesson_dir, date, score, hub);
+        return text(res.summary);
+      }),
+  );
+
+  /* 18. polaris_review_due */
+  server.registerTool(
+    "polaris_review_due",
+    {
+      title: "Query due reviews",
+      description:
+        "List all lesson reviews and error log entries due on or before target date, sorted oldest first, with concise review advice.",
+      inputSchema: {
+        subject_dir: z.string().min(1).describe("Subject directory path"),
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD").optional().describe("Target query date (default today)"),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ subject_dir, date }) =>
+      safe(async () => {
+        const res = await getDueReviews(subject_dir, date);
+        return text(res.summary);
+      }),
+  );
+
   /* ───────── Prompts ───────── */
 
   server.registerPrompt(
     "new_course",
     {
       title: "Build a personalized course",
-      description: "Guided workflow to build an evidence-based course from brief to roadmap",
+      description: "Guided end-to-end workflow to build an evidence-based course from brief to Aurora Slides course with scheduling and task sync",
       argsSchema: {
         subject: z.string().describe("Course subject name"),
         goal: z.string().optional().describe("Core goal of the learner"),
@@ -548,15 +708,19 @@ async function startMcp(): Promise<void> {
               `Study time: ${hours_per_week ?? "2-3"} hours per week`,
               `Sources of truth: ${sources ?? "official video transcripts and notebooks"}`,
               "",
-              "Follow the Polaris workflow and quality gates:",
-              "1. polaris_guide to review pipeline, gates, and research methods.",
-              "2. polaris_profile { action: 'get' } to inspect learner methods (theory -> memory anchors -> paper notebook -> practice easy-to-hard; predict-then-run).",
+              "Follow the complete Polaris workflow and quality gates:",
+              "1. polaris_guide to review pipeline, quality gates, source policy, schedule, export, and tracking.",
+              "2. polaris_profile { action: 'get' } to inspect learner slots, blackouts, and study methods (theory -> memory anchors -> paper notebook -> practice easy-to-hard; predict-then-run).",
               "3. polaris_start to initialize polaris/brief.json with measurable outcome checks.",
-              "4. polaris_research / polaris_find to discover literature and tutorials across keyless providers.",
+              "4. polaris_research / polaris_find to discover literature, specs, and tutorials across keyless providers (openalex, arxiv, semanticscholar, crossref, wikipedia, youtube, github).",
               "5. polaris_source_add / polaris_capture to register and capture primary materials and open-access PDFs.",
-              "6. polaris_fact_add to extract key claims with locators (pages, timestamps).",
+              "6. polaris_fact_add to extract discrete claims with precise locators (pages [p. N], timestamps [mm:ss]).",
               "7. polaris_roadmap_save to structure modules (why, outputs, core citing facts, misconceptions, materials with minutes, 3 practice tiers with DoD, 4+ self-check questions with predict, checkpoint) and render ROADMAP.md in Vietnamese.",
               "8. polaris_check to verify 0 errors.",
+              "9. polaris_schedule to deterministically fit module hours into slots minus blackouts and P0 deadlines, writing schedule.json and updating Section 3.2.",
+              "10. polaris_export_course to generate Aurora course.json and lesson outline skeletons in polaris/lessons/<dir>.outline.md.",
+              "11. polaris_tasks_sync to append scheduled lesson and checkpoint tasks to TASKS.md under ## Polaris.",
+              "12. Build the first lesson deck with Aurora Slides tools according to its outline skeleton.",
             ].join("\n"),
           },
         },
@@ -597,6 +761,39 @@ async function startMcp(): Promise<void> {
     }),
   );
 
+  server.registerPrompt(
+    "next_lesson",
+    {
+      title: "Build the next scheduled lesson deck",
+      description: "Pick the next scheduled lesson, refresh outline, build slide deck with Aurora, audit, and sync tasks",
+      argsSchema: {
+        subject_dir: z.string().describe("Subject directory path"),
+        lesson_dir: z.string().optional().describe("Specific lesson folder e.g. '01-vong-lap-agent' (defaults to next due)"),
+      },
+    },
+    ({ subject_dir, lesson_dir }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: [
+              `Build and verify the next lesson deck for course at ${subject_dir}${lesson_dir ? ` (target: ${lesson_dir})` : ""}.`,
+              "",
+              "1. Check polaris_review_due to see if any spaced review or error log review is due before starting new material.",
+              "2. Inspect polaris/course-map.json and polaris/lessons/ to find the target lesson outline skeleton.",
+              "3. Follow the lesson outline skeleton: Title, Theory, Anchors (Memory palace & visual anchors), Notebook page (4-8 lines), Predict-then-run practice (easy -> hard), Quiz (with distractors from misconceptions), Recall walk, and Summary.",
+              "4. Build the deck in <course_dir>/<lesson_dir>/deck.json using Aurora Slides tools, strictly adhering to Aurora accuracy rules and citing facts in `source`.",
+              "5. Run aurora_audit to verify slide length, typography, and contrast.",
+              "6. Run polaris_tasks_sync to keep tasks synchronized.",
+              "7. When the learner finishes studying the deck, call polaris_lesson_done to schedule retention reviews.",
+            ].join("\n"),
+          },
+        },
+      ],
+    }),
+  );
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
@@ -611,6 +808,9 @@ Usage: node polaris.mjs [command] [options]
   (no command) | mcp            run the MCP server on stdio
   check <subject_dir>           run quality gates audit
   render <subject_dir>          re-render ROADMAP.md from polaris/roadmap.json
+  schedule <subject_dir>        generate schedule and update ROADMAP.md weekly table
+  export <subject_dir>          export Aurora course.json and lesson outlines
+  tasks <subject_dir>           sync tasks to <subject_dir>/TASKS.md
   guide [topic]                 view guide documentation
   version | --version           print version
   help | --help                 print this help`;
@@ -685,6 +885,39 @@ async function cli(args: string[]): Promise<number> {
       const { atomicWriteFile } = await import("./util.js");
       await atomicWriteFile(targetMd, md);
       console.log(`Rendered ROADMAP.md to ${targetMd}`);
+      return 0;
+    }
+
+    case "schedule": {
+      if (!target) {
+        console.error("Usage: polaris schedule <subject_dir>");
+        return 1;
+      }
+      const dir = resolve(target);
+      const res = await buildSchedule({ subject_dir: dir });
+      console.log(res.summary);
+      return 0;
+    }
+
+    case "export": {
+      if (!target) {
+        console.error("Usage: polaris export <subject_dir>");
+        return 1;
+      }
+      const dir = resolve(target);
+      const res = await exportCourse({ subject_dir: dir });
+      console.log(res.summary);
+      return 0;
+    }
+
+    case "tasks": {
+      if (!target) {
+        console.error("Usage: polaris tasks <subject_dir>");
+        return 1;
+      }
+      const dir = resolve(target);
+      const res = await syncTasks(dir);
+      console.log(res.summary);
       return 0;
     }
 

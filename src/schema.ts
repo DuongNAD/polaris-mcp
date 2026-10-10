@@ -12,6 +12,17 @@ export type SelfCheckLevel = (typeof SELF_CHECK_LEVELS)[number];
 
 /* ───────── Learner Profile ───────── */
 
+export const StudySlotSchema = z.strictObject({
+  day: z.enum(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]).describe("Day of week: Mon, Tue, Wed, Thu, Fri, Sat, Sun"),
+  minutes: z.number().int().min(15).max(480).describe("Duration of study slot in minutes"),
+});
+
+export const BlackoutSchema = z.strictObject({
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "from date must be YYYY-MM-DD"),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "to date must be YYYY-MM-DD"),
+  reason: z.string().optional(),
+});
+
 export const SessionTypeSchema = z.strictObject({
   name: z.string().min(1),
   minutes: z.number().int().min(1),
@@ -27,6 +38,11 @@ export const CommitmentSchema = z.strictObject({
 
 export const LearnerProfileSchema = z.strictObject({
   lang: z.string().default("vi"),
+  slots: z.array(StudySlotSchema).default([
+    { day: "Tue", minutes: 30 },
+    { day: "Sat", minutes: 60 },
+  ]),
+  blackouts: z.array(BlackoutSchema).default([]),
   method: z.strictObject({
     summary: z.string().min(1),
     theoryFirst: z.boolean().default(true),
@@ -48,6 +64,8 @@ export const LearnerProfileSchema = z.strictObject({
 });
 
 export type LearnerProfile = z.output<typeof LearnerProfileSchema>;
+export type StudySlot = z.output<typeof StudySlotSchema>;
+export type Blackout = z.output<typeof BlackoutSchema>;
 
 /* ───────── Course Brief ───────── */
 
@@ -185,6 +203,9 @@ export const RoadmapModuleSchema = z.strictObject({
   }),
   selfCheck: z.array(SelfCheckItemSchema).min(4).describe("Tự kiểm tra: at least 4 questions"),
   checkpoint: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]).describe("Checkpoint completion criteria"),
+  lessons: z.number().int().min(1).max(10).optional().describe("Number of lessons (default 1, or 2 if hours > 2.5)"),
+  theme: z.string().optional().describe("Theme of this module's lesson deck"),
+  icon: z.string().optional().describe("Icon for this module's lesson deck"),
 });
 
 export type RoadmapModule = z.output<typeof RoadmapModuleSchema>;
@@ -225,6 +246,7 @@ export const OlderMaterialItemSchema = z.strictObject({
 
 export const RoadmapSchema = z.strictObject({
   title: z.string().min(1),
+  theme: z.string().optional().describe("Overall theme for the course deck e.g. midnight"),
   version: z.union([z.string(), z.number()]).default("1"),
   updated: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "updated must be YYYY-MM-DD").optional(),
   goalQuote: z.string().optional(),
@@ -346,5 +368,195 @@ export function validateProfile(raw: unknown): ValidationOutcome<LearnerProfile>
   return {
     ok: false,
     errors: formatZodErrors(parsed.error.issues, LearnerProfileSchema.shape),
+  };
+}
+
+/* ───────── Schedule ───────── */
+
+export const ScheduleSessionSchema = z.strictObject({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD"),
+  day: z.string().min(1).describe("Vietnamese day of week e.g. 'Thứ Ba'"),
+  minutes: z.number().int().min(1).describe("Session minutes"),
+  module: z.string().min(1).describe("Module ID or 'Review'"),
+  activity: z.string().min(1).describe("Activity description"),
+  when: z.string().min(1).describe("When label e.g. 'Tuần 2 · Thứ Ba 20/10'"),
+});
+
+export const ScheduleWeekSchema = z.strictObject({
+  week: z.number().int().min(1),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  sessions: z.array(ScheduleSessionSchema),
+});
+
+export const BlockedDateEntrySchema = z.strictObject({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  reason: z.string().min(1),
+});
+
+export const ModuleCompletionEntrySchema = z.strictObject({
+  completedDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  lastSession: z.string().min(1),
+});
+
+export const ScheduleSchema = z.strictObject({
+  startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  interleaveEvery: z.number().int().min(1).default(4),
+  weeks: z.array(ScheduleWeekSchema),
+  moduleCompletion: z.record(z.string(), ModuleCompletionEntrySchema).default({}),
+  lessonWhenMap: z.record(z.string(), z.string()).default({}),
+  blockedDates: z.array(BlockedDateEntrySchema).default([]),
+});
+
+export type ScheduleSession = z.output<typeof ScheduleSessionSchema>;
+export type ScheduleWeek = z.output<typeof ScheduleWeekSchema>;
+export type Schedule = z.output<typeof ScheduleSchema>;
+
+export function validateSchedule(raw: unknown): ValidationOutcome<Schedule> {
+  const parsed = ScheduleSchema.safeParse(raw);
+  if (parsed.success) return { ok: true, value: parsed.data, errors: [] };
+  return {
+    ok: false,
+    errors: formatZodErrors(parsed.error.issues, ScheduleSchema.shape),
+  };
+}
+
+/* ───────── Aurora Course & Course Map ───────── */
+
+export const AURORA_THEMES = ["aurora", "midnight", "daylight", "titanium", "ocean", "sunset", "forest", "paper", "liquid"] as const;
+export type AuroraTheme = (typeof AURORA_THEMES)[number];
+
+export const CourseLessonSchema = z.strictObject({
+  title: z.string().min(1).describe("Lesson title e.g. 'Cổng lượng tử'"),
+  summary: z.string().min(1).optional().describe("One line: what this lesson covers"),
+  when: z.string().min(1).optional().describe("When this lesson takes place, e.g. 'Tuần 2 · Thứ Ba 20/10'"),
+  dir: z
+    .string()
+    .regex(/^[A-Za-z0-9._-]+$/, "dir is a plain folder name like 02-cong-luong-tu")
+    .optional()
+    .describe("Folder name of this lesson inside the course (default: 01-<slug>, 02-<slug>, …)"),
+  icon: z.string().min(1).optional().describe("Phosphor or Iconify icon id"),
+  theme: z.enum(AURORA_THEMES).optional().describe("Theme of this lesson's deck"),
+  accent: z.string().optional(),
+  minutes: z.number().int().min(1).max(240).optional().describe("Estimated study time"),
+});
+
+export const CourseSchema = z.strictObject({
+  $schema: z.string().optional(),
+  title: z.string().min(1).describe("Course title"),
+  subtitle: z.string().min(1).optional().describe("One line promise of the course"),
+  author: z.string().optional(),
+  lang: z.string().default("vi"),
+  theme: z.enum(AURORA_THEMES).default("midnight"),
+  accent: z.string().optional(),
+  font: z.enum(["vietnam", "inter", "system"]).default("vietnam"),
+  lessons: z.array(CourseLessonSchema).min(1).max(40).describe("Small lessons in study order"),
+});
+
+export const CourseMapLessonSchema = z.strictObject({
+  module: z.string().min(1),
+  part: z.string().optional(),
+  dir: z.string().min(1),
+  title: z.string().min(1),
+  theme: z.enum(AURORA_THEMES),
+  icon: z.string().min(1),
+  when: z.string().optional(),
+  minutes: z.number().int().default(20),
+});
+
+export const CourseMapSchema = z.strictObject({
+  courseDir: z.string().min(1),
+  updated: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  lessons: z.array(CourseMapLessonSchema),
+});
+
+export type Course = z.output<typeof CourseSchema>;
+export type CourseLesson = z.output<typeof CourseLessonSchema>;
+export type CourseMapLesson = z.output<typeof CourseMapLessonSchema>;
+export type CourseMap = z.output<typeof CourseMapSchema>;
+
+export function validateCourse(raw: unknown): ValidationOutcome<Course> {
+  const parsed = CourseSchema.safeParse(raw);
+  if (parsed.success) return { ok: true, value: parsed.data, errors: [] };
+  return {
+    ok: false,
+    errors: formatZodErrors(parsed.error.issues, CourseSchema.shape),
+  };
+}
+
+export function validateCourseMap(raw: unknown): ValidationOutcome<CourseMap> {
+  const parsed = CourseMapSchema.safeParse(raw);
+  if (parsed.success) return { ok: true, value: parsed.data, errors: [] };
+  return {
+    ok: false,
+    errors: formatZodErrors(parsed.error.issues, CourseMapSchema.shape),
+  };
+}
+
+/* ───────── Tasks Map ───────── */
+
+export const TasksMapItemSchema = z.strictObject({
+  key: z.string().min(1),
+  line: z.string().min(1),
+  deadline: z.string().min(1),
+  syncedAt: z.string().min(1),
+});
+
+export const TasksMapSchema = z.strictObject({
+  updated: z.string().min(1),
+  tasks: z.record(z.string(), TasksMapItemSchema),
+});
+
+export type TasksMap = z.output<typeof TasksMapSchema>;
+
+/* ───────── Error Log & Spaced Reviews ───────── */
+
+export const ErrorLogEntryInputSchema = z.strictObject({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  module: z.string().optional(),
+  lesson: z.string().optional(),
+  prediction: z.string().optional(),
+  result: z.string().optional(),
+  why: z.string().min(1).describe("Nguyên nhân gốc rễ gây lỗi"),
+  fix: z.string().min(1).describe("Cách sửa và quy tắc rút ra"),
+  source: z.string().optional().describe("Nguồn hoặc tài liệu tham khảo"),
+});
+
+export type ErrorLogEntryInput = z.input<typeof ErrorLogEntryInputSchema>;
+
+export const ReviewStepSchema = z.strictObject({
+  dayOffset: z.number().int().min(1),
+  dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  done: z.boolean().default(false),
+  doneDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  score: z.union([z.number(), z.string()]).optional(),
+});
+
+export const ReviewItemSchema = z.strictObject({
+  id: z.string().min(1),
+  type: z.enum(["lesson", "error"]),
+  title: z.string().min(1),
+  module: z.string().optional(),
+  lessonDir: z.string().optional(),
+  createdDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  steps: z.array(ReviewStepSchema),
+  details: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const ReviewsDataSchema = z.strictObject({
+  updated: z.string().min(1),
+  items: z.array(ReviewItemSchema),
+});
+
+export type ReviewStep = z.output<typeof ReviewStepSchema>;
+export type ReviewItem = z.output<typeof ReviewItemSchema>;
+export type ReviewsData = z.output<typeof ReviewsDataSchema>;
+
+export function validateReviewsData(raw: unknown): ValidationOutcome<ReviewsData> {
+  const parsed = ReviewsDataSchema.safeParse(raw);
+  if (parsed.success) return { ok: true, value: parsed.data, errors: [] };
+  return {
+    ok: false,
+    errors: formatZodErrors(parsed.error.issues, ReviewsDataSchema.shape),
   };
 }

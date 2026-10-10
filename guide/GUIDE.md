@@ -139,6 +139,40 @@ When running research (`polaris_research`), Polaris generates a tracked shortlis
 - **Review Gate Workflow:** By default (`auto_add: 0`), the agent presents the top 10 candidates with their scores and evaluation reasons, then pauses to wait for learner approval before adding items to `sources.json`.
 - **Auto Mode:** If the learner explicitly requests automated sourcing (`auto_add > 0`), the top N items are automatically registered in `sources.json` (labeled `extension` unless matching a brief `sourcesOfTruth`), scored, and captured into `captures/<id>.md`.
 
+## schedule
+
+Polaris v0.2b provides deterministic study schedule fitting module hours into learner weekly slots:
+- **Topological Sorting:** Modules are ordered strictly by their prerequisites (`depends`), ensuring foundational concepts precede advanced modules.
+- **Slot Filling:** The learner's weekly study slots (e.g. `[{ day: "Tue", minutes: 30 }, { day: "Sat", minutes: 60 }]`) are filled sequentially from the start date until each module's estimated hours are completed.
+- **Calendar Protection:**
+  - Skips dates defined in profile `blackouts` (`[{ from, to, reason }]`).
+  - Skips the day of and the day before every unchecked P0 deadline found in the learning hub's `ACTIVE_LEARNING.md` or `TASKS.md` (`- [ ] [Deadline: YYYY-MM-DD HH:mm] [Priority: P0]`).
+- **Interleaved Review:** Injects an interleaved review session every `interleave_every` weeks (default: 4) covering all modules completed up to that point.
+- **Artifacts:**
+  - Writes `polaris/schedule.json`.
+  - Re-renders `ROADMAP.md` Section 3.2 (Lịch theo tuần) as a formatted weekly table and Section 5 (Spaced review schedule).
+  - Generates Vietnamese `when` labels: `"Tuần 2 · Thứ Ba 20/10"` (`dd/mm/yyyy` if crossing into a future year).
+
+## export
+
+Export personal study courses into Aurora Slides decks with structured lesson skeletons:
+- **Aurora `course.json`:** Generated at `<subject>/05_Slides/<slug>/course.json`. Strictly adheres to Aurora `CourseSchema` (no extra keys allowed).
+- **Lessons Splitting:** One lesson per module by default; two lessons (a/b) when module hours exceed 2.5 hours or when `lessons: 2` is set.
+- **Theme & Icon Rotation:** Cycles through Aurora themes (`aurora`, `midnight`, `daylight`, `titanium`, `ocean`, `sunset`, `forest`, `paper`, `liquid`) so neighbouring decks differ visually, with default Phosphor duotone icons.
+- **Idempotency:** Existing `course.json` customizations (`dir`, `title`, `theme`, `icon`) are preserved via `polaris/course-map.json`.
+- **Lesson Outline Skeletons (`polaris/lessons/<dir>.outline.md`):**
+  - Generated in Vietnamese with module metadata, `when`, minutes, theme, and Phosphor icon.
+  - Skeletons include: 1. Mục tiêu (outputs), 2. Dữ kiện có nguồn (facts for `source` citation), 3. Hiểu lầm -> phương án nhiễu cho Quiz, 4. Thực hành (DoD without solution code), 5. Neo trí nhớ gợi ý (palace, anchors, analogy, mnemonic), 6. Trang vở gợi ý (4-8 lines), 7. Tự kiểm tra, 8. Code liên quan, and 9. Slide-plan skeleton.
+  - **Protection:** Never overwrites an existing outline (writes `<dir>.outline.new.md` instead).
+
+## tracking
+
+Track mastery, errors, and scheduled reviews:
+- **Sổ lỗi (Error Log):** `polaris_errorlog_add` records runtime prediction gaps in `polaris/errorlog.md` with date, prediction, actual result, root cause (`why`), rule/fix, and sources.
+- **Spaced Review:** Automatically schedules spaced repetition reviews (D+1, D+3, D+7, D+16, D+35) in `polaris/reviews.json` for completed lessons (`polaris_lesson_done`) and error log entries.
+- **Task Synchronization:** `polaris_tasks_sync` appends lesson tasks and module checkpoints under `## Polaris` in `<subject>/TASKS.md` in standard hub format (`- [ ] [Deadline: YYYY-MM-DD 23:59] [Priority: P2] ...`), preserving file line endings and preventing duplicates via `polaris/tasks-map.json`.
+- **Daily Review Due:** `polaris_review_due` retrieves all lessons and error log items due on or before today, sorted oldest first, with concise review advice.
+
 ## learner
 
 **The Learner Method & Preferences:**

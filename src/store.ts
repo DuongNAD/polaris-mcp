@@ -24,6 +24,11 @@ import { atomicWriteFile, profilePath, readJson, slugify, subjectPaths, todayIso
 export function defaultLearnerProfile(): LearnerProfile {
   return {
     lang: "vi",
+    slots: [
+      { day: "Tue", minutes: 30 },
+      { day: "Sat", minutes: 60 },
+    ],
+    blackouts: [],
     method: {
       summary: "Theory -> memory anchors -> paper notebook notes -> practice easy-to-hard -> recall walk; predict-then-run for code.",
       theoryFirst: true,
@@ -64,6 +69,8 @@ export async function updateProfile(patch: Record<string, unknown>, hub?: string
   const merged = {
     ...current,
     ...patch,
+    slots: patch.slots && Array.isArray(patch.slots) ? patch.slots : current.slots,
+    blackouts: patch.blackouts && Array.isArray(patch.blackouts) ? patch.blackouts : current.blackouts,
     method: patch.method && typeof patch.method === "object"
       ? { ...current.method, ...(patch.method as Record<string, unknown>) }
       : current.method,

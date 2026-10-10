@@ -6,7 +6,7 @@ import { homedir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.2.0";
 export const PKG_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const UA = `Polaris/0.2 (personal study course builder; https://github.com/DuongNAD) Node.js/${process.versions.node}`;
 
@@ -27,11 +27,17 @@ export interface SubjectPaths {
   factsJson: string;
   roadmapJson: string;
   scheduleJson: string;
+  courseMapJson: string;
+  tasksMapJson: string;
+  reviewsJson: string;
+  errorlogMd: string;
   capturesDir: string;
   researchDir: string;
+  lessonsDir: string;
   cacheDir: string;
   gitignore: string;
   defaultRoadmapMd: string;
+  tasksMd: string;
 }
 
 export function subjectPaths(target: string): SubjectPaths {
@@ -51,15 +57,85 @@ export function subjectPaths(target: string): SubjectPaths {
     factsJson: join(polarisDir, "facts.json"),
     roadmapJson: join(polarisDir, "roadmap.json"),
     scheduleJson: join(polarisDir, "schedule.json"),
+    courseMapJson: join(polarisDir, "course-map.json"),
+    tasksMapJson: join(polarisDir, "tasks-map.json"),
+    reviewsJson: join(polarisDir, "reviews.json"),
+    errorlogMd: join(polarisDir, "errorlog.md"),
     capturesDir: join(polarisDir, "captures"),
     researchDir: join(polarisDir, "research"),
+    lessonsDir: join(polarisDir, "lessons"),
     cacheDir: join(polarisDir, ".cache"),
     gitignore: join(polarisDir, ".gitignore"),
     defaultRoadmapMd: join(dir, "04_Roadmaps", "ROADMAP.md"),
+    tasksMd: join(dir, "TASKS.md"),
   };
 }
 
 export const hash = (s: string, n = 8): string => createHash("sha1").update(s).digest("hex").slice(0, n);
+
+/* ───────── Date and Schedule Helpers ───────── */
+
+export function parseIsoDate(dateIso: string): Date {
+  const parts = dateIso.split("-").map((x) => parseInt(x, 10));
+  const y = parts[0] ?? 2026;
+  const m = parts[1] ?? 1;
+  const d = parts[2] ?? 1;
+  return new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+}
+
+export function formatIsoDate(d: Date): string {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+export function addDays(dateIso: string, days: number): string {
+  const dt = parseIsoDate(dateIso);
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return formatIsoDate(dt);
+}
+
+export function daysBetween(fromIso: string, toIso: string): number {
+  const d1 = parseIsoDate(fromIso);
+  const d2 = parseIsoDate(toIso);
+  return Math.round((d2.getTime() - d1.getTime()) / (24 * 60 * 60 * 1000));
+}
+
+const EN_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+export type EnDayOfWeek = (typeof EN_DAYS)[number];
+
+const VI_DAYS = ["Chủ Nhật", "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy"] as const;
+const VI_SHORT_DAYS = ["CN", "Hai", "Ba", "Tư", "Năm", "Sáu", "Bảy"] as const;
+
+export function dayOfWeekEn(dateIso: string): EnDayOfWeek {
+  const d = parseIsoDate(dateIso);
+  return EN_DAYS[d.getUTCDay()]!;
+}
+
+export function dayOfWeekVi(dateIso: string): string {
+  const d = parseIsoDate(dateIso);
+  return VI_DAYS[d.getUTCDay()]!;
+}
+
+export function shortDayVi(dateIso: string): string {
+  const d = parseIsoDate(dateIso);
+  return VI_SHORT_DAYS[d.getUTCDay()]!;
+}
+
+export function formatWhenLabel(dateIso: string, startIso: string, weekNum: number): string {
+  const dayVi = dayOfWeekVi(dateIso);
+  const targetYear = dateIso.slice(0, 4);
+  const startYear = startIso.slice(0, 4);
+  const dd = dateIso.slice(8, 10);
+  const mm = dateIso.slice(5, 7);
+
+  let datePart = `${dd}/${mm}`;
+  if (targetYear !== startYear) {
+    datePart = `${dd}/${mm}/${targetYear}`;
+  }
+  return `Tuần ${weekNum} · ${dayVi} ${datePart}`;
+}
 
 export function slugify(s: string): string {
   return (

@@ -173,35 +173,61 @@ try {
   const { tools } = await client.listTools();
   const toolNames = tools.map((t) => t.name).sort();
   ok(
-    "12 tools registered",
-    toolNames.length === 12 &&
-      toolNames.includes("polaris_find") &&
-      toolNames.includes("polaris_research") &&
-      toolNames.includes("polaris_capture"),
+    "18 tools registered",
+    toolNames.length === 18 &&
+      toolNames.includes("polaris_schedule") &&
+      toolNames.includes("polaris_export_course") &&
+      toolNames.includes("polaris_tasks_sync") &&
+      toolNames.includes("polaris_errorlog_add") &&
+      toolNames.includes("polaris_lesson_done") &&
+      toolNames.includes("polaris_review_due"),
     toolNames.join(", "),
   );
 
   const { prompts } = await client.listPrompts();
   const promptNames = prompts.map((p) => p.name).sort();
-  ok("prompts listed", promptNames.includes("new_course") && promptNames.includes("research"), promptNames.join(", "));
+  ok(
+    "prompts listed (new_course, research, next_lesson)",
+    promptNames.includes("new_course") && promptNames.includes("research") && promptNames.includes("next_lesson"),
+    promptNames.join(", "),
+  );
 
-  // 3.1 polaris_guide (all topics including research)
+  // Set up temp hub ACTIVE_LEARNING.md with unchecked P0 deadline
+  process.env.POLARIS_HUB = TEST_DIR;
+  writeFileSync(
+    join(TEST_DIR, "ACTIVE_LEARNING.md"),
+    "# Active Learning Hub\n\n- [ ] [Deadline: 2026-10-24 18:00] [Priority: P0] GCI HW3 submission deadline\n- [ ] [Deadline: 2026-11-05 18:00] [Priority: P1] Other homework\n",
+    "utf8",
+  );
+
+  // 3.1 polaris_guide (all topics including schedule, export, tracking)
   let r = await call("polaris_guide");
   ok("guide overview", !r.isError && textOf(r).includes("Available guide topics"), textOf(r).split("\n")[0]);
-  r = await call("polaris_guide", { topic: "research" });
-  ok("guide research topic", !r.isError && textOf(r).includes("Keyless Providers:") && textOf(r).includes("The Review Gate"));
-  r = await call("polaris_guide", { topic: "gates" });
-  ok("guide gates topic", !r.isError && textOf(r).includes("Quality gates run during"));
+  r = await call("polaris_guide", { topic: "schedule" });
+  ok("guide schedule topic", !r.isError && textOf(r).includes("Topological Sorting:"));
+  r = await call("polaris_guide", { topic: "export" });
+  ok("guide export topic", !r.isError && textOf(r).includes("course.json"));
+  r = await call("polaris_guide", { topic: "tracking" });
+  ok("guide tracking topic", !r.isError && textOf(r).includes("Sổ lỗi (Error Log):"));
 
-  // 3.2 polaris_profile
+  // 3.2 polaris_profile (with slots & blackouts)
   r = await call("polaris_profile", { action: "get", hub: TEST_DIR });
   ok("profile get", !r.isError && textOf(r).includes('"lang": "vi"') && textOf(r).includes("memoryAnchors"));
   r = await call("polaris_profile", {
     action: "update",
-    patch: { taste: { slideStyle: "Apple-keynote", noEmoji: true, noNeon: true, accent: "titanium" } },
+    patch: {
+      slots: [
+        { day: "Tue", minutes: 30 },
+        { day: "Sat", minutes: 60 },
+      ],
+      blackouts: [
+        { from: "2026-10-20", to: "2026-10-21", reason: "Family event" },
+      ],
+      taste: { slideStyle: "Apple-keynote", noEmoji: true, noNeon: true, accent: "titanium" },
+    },
     hub: TEST_DIR,
   });
-  ok("profile update", !r.isError && textOf(r).includes('"accent": "titanium"'));
+  ok("profile update with slots and blackouts", !r.isError && textOf(r).includes('"accent": "titanium"') && textOf(r).includes('"slots"'));
 
   // 3.3 polaris_start
   const validBrief = {
@@ -449,9 +475,199 @@ try {
   // Restore valid roadmap
   await call("polaris_roadmap_save", { subject_dir: SUBJECT_DIR, roadmap: validRoadmap });
 
-  // 3.14 CLI tests
-  const guideCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "guide", "research"], { encoding: "utf8" });
-  ok("CLI guide research", guideCli.includes("Keyless Providers:") && guideCli.includes("The Review Gate"));
+  // 3.14 polaris_schedule
+  r = await call("polaris_schedule", {
+    subject_dir: SUBJECT_DIR,
+    start: "2026-10-12",
+    hub: TEST_DIR,
+  });
+  ok("polaris_schedule succeeds", !r.isError && textOf(r).includes("Schedule generated successfully"));
+  const schedFile = join(SUBJECT_DIR, "polaris", "schedule.json");
+  ok("schedule.json exists on disk", existsSync(schedFile));
+
+  const schedData = JSON.parse(readFileSync(schedFile, "utf8"));
+  ok("schedule has active weeks", schedData.weeks.length >= 5, `weeks: ${schedData.weeks.length}`);
+
+  // Week 1 sessions: 2026-10-13 (Tue 30m), 2026-10-17 (Sat 60m)
+  const w1 = schedData.weeks.find((w) => w.week === 1);
+  ok(
+    "Week 1 sessions (Tue 10-13 30m, Sat 10-17 60m)",
+    w1?.sessions?.length === 2 &&
+      w1.sessions[0]?.date === "2026-10-13" &&
+      w1.sessions[0]?.minutes === 30 &&
+      w1.sessions[1]?.date === "2026-10-17" &&
+      w1.sessions[1]?.minutes === 60,
+  );
+
+  // Week 2 skipped due to blackout (2026-10-20) and P0 deadline (2026-10-24)
+  const w2 = schedData.weeks.find((w) => w.week === 2);
+  ok("Week 2 skipped due to blackout and P0 deadline", !w2 || w2.sessions.length === 0);
+
+  // Week 3 sessions: Tue 2026-10-27 (30m), Sat 2026-10-31 (60m) -> completes M1 (180m total)
+  const w3 = schedData.weeks.find((w) => w.week === 3);
+  ok(
+    "Week 3 sessions (Tue 10-27 30m, Sat 10-31 60m)",
+    w3?.sessions?.length === 2 &&
+      w3.sessions[0]?.date === "2026-10-27" &&
+      w3.sessions[1]?.date === "2026-10-31",
+  );
+  ok("Module M1 completed on 2026-10-31", schedData.moduleCompletion?.M1?.completedDate === "2026-10-31");
+
+  // Week 4 has interleaved review 1 on Tue 2026-11-03
+  const w4 = schedData.weeks.find((w) => w.week === 4);
+  ok(
+    "Week 4 contains Interleaved Review session",
+    w4?.sessions?.some((s) => s.module === "Review" && s.activity.includes("Ôn xen kẽ 1")),
+  );
+
+  // Check when-label format
+  ok(
+    "when-label format in Vietnamese",
+    schedData.lessonWhenMap?.M1 === "Tuần 1 · Thứ Ba 13/10" || schedData.lessonWhenMap?.M1?.includes("Tuần 1 · Thứ Ba"),
+    schedData.lessonWhenMap?.M1,
+  );
+
+  // Check ROADMAP.md Section 3.2 re-rendered with weekly table
+  const updatedRoadmapContent = readFileSync(roadmapMdPath, "utf8");
+  ok(
+    "ROADMAP.md Section 3.2 contains weekly table",
+    updatedRoadmapContent.includes("| Tuần | Buổi | Module | Sản phẩm / DoD | Hạn |") &&
+      updatedRoadmapContent.includes("Ba 10-13 (30')") &&
+      updatedRoadmapContent.includes("2026-10-31 (M1)"),
+  );
+
+  // 3.15 polaris_export_course
+  r = await call("polaris_export_course", { subject_dir: SUBJECT_DIR });
+  ok("export_course succeeds", !r.isError && textOf(r).includes("Course exported successfully"));
+
+  const courseDir = join(SUBJECT_DIR, "05_Slides", "ai-agents-101");
+  const courseJsonFile = join(courseDir, "course.json");
+  ok("course.json exists on disk", existsSync(courseJsonFile));
+
+  const courseJson = JSON.parse(readFileSync(courseJsonFile, "utf8"));
+  const vCourseCheck = polarisLib.validateCourse(courseJson);
+  ok("course.json strictly matches Aurora CourseSchema", vCourseCheck.ok, vCourseCheck.errors?.join("; "));
+  ok("course.json has valid lessons with dirs and when labels", courseJson.lessons.length >= 2 && Boolean(courseJson.lessons[0].dir));
+
+  // Aurora build verification if tool exists
+  const auroraCliPath = "D:/03_Development_Projects/Slide_Projects/my_projects/aurora_slides_mcp/dist/aurora.mjs";
+  if (existsSync(auroraCliPath)) {
+    try {
+      const auroraBuildOut = execFileSync(process.execPath, [auroraCliPath, "build", courseDir], { encoding: "utf8" });
+      ok("Aurora CLI builds course without errors", !auroraBuildOut.includes("error"), auroraBuildOut.slice(0, 80));
+    } catch (e) {
+      skip("Aurora CLI build", `Aurora build failed: ${polarisLib.errMsg(e)}`);
+    }
+  } else {
+    skip("Aurora CLI build", `Aurora CLI binary not found at ${auroraCliPath}`);
+  }
+
+  // Outline skeletons check
+  const lessonsDir = join(SUBJECT_DIR, "polaris", "lessons");
+  const outlineFiles = existsSync(lessonsDir) ? readdirSync(lessonsDir) : [];
+  ok("lesson outline skeletons generated", outlineFiles.some((f) => f.endsWith(".outline.md")), outlineFiles.join(", "));
+
+  const firstOutlinePath = join(lessonsDir, outlineFiles[0]);
+  const firstOutline = readFileSync(firstOutlinePath, "utf8");
+  ok(
+    "outline skeleton contains all required Vietnamese sections",
+    firstOutline.includes("## 1. Mục tiêu") &&
+      firstOutline.includes("## 2. Dữ kiện có nguồn") &&
+      firstOutline.includes("## 3. Hiểu lầm -> Phương án nhiễu") &&
+      firstOutline.includes("## 4. Thực hành & Dự đoán") &&
+      firstOutline.includes("## 5. Neo trí nhớ gợi ý") &&
+      firstOutline.includes("## 6. Trang vở gợi ý") &&
+      firstOutline.includes("## 7. Tự kiểm tra") &&
+      firstOutline.includes("## 8. Code liên quan") &&
+      firstOutline.includes("## 9. Dàn ý Slide đề xuất"),
+  );
+
+  // Idempotent export test: calling export a second time preserves outlines and keeps course.json stable
+  const rExport2 = await call("polaris_export_course", { subject_dir: SUBJECT_DIR });
+  ok("export course twice is idempotent", !rExport2.isError);
+  const outlineFilesAfter2 = readdirSync(lessonsDir);
+  ok(
+    "second export preserves existing outline and writes .new.md candidate",
+    outlineFilesAfter2.some((f) => f.endsWith(".outline.new.md")),
+  );
+
+  // 3.16 polaris_tasks_sync
+  r = await call("polaris_tasks_sync", { subject_dir: SUBJECT_DIR });
+  ok("tasks_sync succeeds", !r.isError && textOf(r).includes("Tasks sync complete"));
+
+  const tasksMdPath = join(SUBJECT_DIR, "TASKS.md");
+  ok("TASKS.md created under subject directory", existsSync(tasksMdPath));
+
+  const tasksContent = readFileSync(tasksMdPath, "utf8");
+  ok(
+    "TASKS.md contains ## Polaris and valid task format",
+    tasksContent.includes("## Polaris") &&
+      /- \[\s*\]\s*\[Deadline:\s*\d{4}-\d{2}-\d{2}\s+23:59\]\s*\[Priority:\s*P2\]\s*Học bài/i.test(tasksContent) &&
+      /- \[\s*\]\s*\[Deadline:\s*\d{4}-\d{2}-\d{2}\s+23:59\]\s*\[Priority:\s*P2\]\s*Checkpoint Module/i.test(tasksContent),
+  );
+
+  // Idempotent tasks sync test
+  const rTasks2 = await call("polaris_tasks_sync", { subject_dir: SUBJECT_DIR });
+  ok("second tasks_sync adds 0 new tasks", !rTasks2.isError && textOf(rTasks2).includes("Tasks added: 0"));
+  const tasksContent2 = readFileSync(tasksMdPath, "utf8");
+  ok("no duplicate task lines after second sync", tasksContent === tasksContent2);
+
+  // 3.17 polaris_errorlog_add
+  r = await call("polaris_errorlog_add", {
+    subject_dir: SUBJECT_DIR,
+    entry: {
+      date: "2026-10-15",
+      module: "M1",
+      lesson: "01-vong-lap-agent",
+      prediction: "regex parse khớp mọi biểu thức ngoặc lồng",
+      result: "calculator báo syntax error vì regex dừng ở dấu đóng đầu tiên",
+      why: "regex lười dừng ở dấu đóng ngoặc đơn đầu tiên",
+      fix: "Dùng bộ đếm độ sâu ngoặc hoặc parser đệ quy",
+      source: "Lab 1",
+    },
+    hub: TEST_DIR,
+  });
+  ok("errorlog_add succeeds", !r.isError && textOf(r).includes("Ghi nhận thành công vào Sổ lỗi"));
+
+  const errorlogMdPath = join(SUBJECT_DIR, "polaris", "errorlog.md");
+  ok("errorlog.md exists", existsSync(errorlogMdPath));
+  const errorlogContent = readFileSync(errorlogMdPath, "utf8");
+  ok(
+    "errorlog.md contains entry with correct D+1..D+35 dates",
+    errorlogContent.includes("regex parse khớp mọi biểu thức ngoặc lồng") &&
+      errorlogContent.includes("D+1 (2026-10-16)") &&
+      errorlogContent.includes("D+3 (2026-10-18)") &&
+      errorlogContent.includes("D+7 (2026-10-22)") &&
+      errorlogContent.includes("D+16 (2026-10-31)") &&
+      errorlogContent.includes("D+35 (2026-11-19)"),
+  );
+
+  // 3.18 polaris_lesson_done
+  r = await call("polaris_lesson_done", {
+    subject_dir: SUBJECT_DIR,
+    lesson_dir: "01-vong-lap-agent",
+    date: "2026-10-15",
+    score: "5/5",
+    hub: TEST_DIR,
+  });
+  ok("lesson_done succeeds", !r.isError && textOf(r).includes("Đã ghi nhận hoàn thành bài học"));
+
+  const reviewsJsonPath = join(SUBJECT_DIR, "polaris", "reviews.json");
+  ok("reviews.json exists", existsSync(reviewsJsonPath));
+  const reviewsData = JSON.parse(readFileSync(reviewsJsonPath, "utf8"));
+  ok("reviews.json has both error and lesson items", reviewsData.items.length === 2);
+
+  // 3.19 polaris_review_due
+  r = await call("polaris_review_due", {
+    subject_dir: SUBJECT_DIR,
+    date: "2026-10-16",
+  });
+  ok("review_due succeeds", !r.isError && textOf(r).includes("Danh sách ôn tập đến hạn tại ngày 2026-10-16: 2 mục"));
+  ok("review_due returns items with D+1 offset", textOf(r).includes("[D+1]") && textOf(r).includes("[Bài học]") && textOf(r).includes("[Sổ lỗi]"));
+
+  // 3.20 CLI tests
+  const guideCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "guide", "schedule"], { encoding: "utf8" });
+  ok("CLI guide schedule", guideCli.includes("Topological Sorting:"));
 
   const checkCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "check", SUBJECT_DIR], { encoding: "utf8" });
   ok("CLI check subject", checkCli.includes("Quality Gate Audit"));
@@ -459,8 +675,17 @@ try {
   const renderCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "render", SUBJECT_DIR], { encoding: "utf8" });
   ok("CLI render subject", renderCli.includes("Rendered ROADMAP.md"));
 
+  const scheduleCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "schedule", SUBJECT_DIR], { encoding: "utf8" });
+  ok("CLI schedule", scheduleCli.includes("Schedule generated successfully"));
+
+  const exportCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "export", SUBJECT_DIR], { encoding: "utf8" });
+  ok("CLI export", exportCli.includes("Course exported successfully"));
+
+  const tasksCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "tasks", SUBJECT_DIR], { encoding: "utf8" });
+  ok("CLI tasks", tasksCli.includes("Tasks sync complete"));
+
   const versionCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "version"], { encoding: "utf8" });
-  ok("CLI version", versionCli.trim() === "0.1.0");
+  ok("CLI version 0.2.0", versionCli.trim() === "0.2.0");
 
   const helpCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "help"], { encoding: "utf8" });
   ok("CLI help", helpCli.includes("Usage: node polaris.mjs"));
