@@ -118,5 +118,50 @@ smart-drive MCP; NotebookLM and DeepTutor answers are registered as sources with
 (`%LOCALAPPDATA%/aurora-slides/toolchain`, which already has @modelcontextprotocol/sdk, zod, esbuild and typescript).
 No other runtime dependencies in v0.1.
 
+## Research engine (v0.2a)
+The learner asked that Polaris find research and learning material on the internet by itself. The agent still plans
+the queries, reads the captures, extracts facts with locators and decides; Polaris searches, ranks, de-duplicates and
+captures. Everything is keyless by default.
+
+Providers (each normalized to `{provider, kind, title, authors, year, venue, url, doi?, arxiv?, citations?, oaUrl?,
+abstract?, lang?}`):
+- `openalex`: api.openalex.org/works?search=...&per-page=N (abstract rebuilt from abstract_inverted_index,
+  cited_by_count, best_oa_location / open_access.oa_url, publication_year, host venue).
+- `arxiv`: export.arxiv.org/api/query?search_query=all:...&max_results=N (Atom XML; at most one call every 3 s).
+- `semanticscholar`: api.semanticscholar.org/graph/v1/paper/search?query=...&fields=title,authors,year,venue,
+  citationCount,openAccessPdf,tldr,externalIds,abstract (back off and retry on HTTP 429).
+- `crossref`: api.crossref.org/works?query=...&rows=N (DOIs, books, journal metadata).
+- `wikipedia`: vi and en, action=query&list=search, then the REST page summary (overviews; label `extension`).
+- `github`: api.github.com/search/repositories?q=... (official repositories and code; 10 requests per minute
+  unauthenticated, use GITHUB_TOKEN only if the user set it).
+- `youtube`: `yt-dlp "ytsearchN:<query>" --flat-playlist -J` (title, channel, duration, url); yt-dlp is installed.
+- `brave` (optional, off unless BRAVE_API_KEY is set): general web search through the Brave Search API free tier.
+  Without it, general web pages come from the agent's own web search tool and are added with `polaris_source_add`.
+
+Tools:
+- `polaris_find {query, providers?, limit?, year_from?, lang?}`: one query, normalized and scored results; nothing is
+  added to the registry.
+- `polaris_research {subject_dir, module?, queries: [...], providers?, per_provider?, year_from?, auto_add?}`: runs
+  every query on every provider (rate limited, responses cached for 24 h in `polaris/.cache/`, git-ignored),
+  de-duplicates (DOI, arXiv id, URL, normalized title), ranks, writes a shortlist file
+  `polaris/research/<yyyy-mm-dd>-<slug>.md` (tracked: rank, title, link, kind, year, citations, open access, score and
+  the reasons), and when `auto_add` > 0 adds the top N as sources (label `extension` unless the item matches a
+  source of truth) and captures them. Returns the shortlist in compact form for the review gate.
+- `polaris_capture {subject_dir, ids, full?}`: (re)capture sources. Web pages: the built-in extractor. Open-access PDFs
+  (arXiv or OpenAlex/Semantic Scholar OA links only): download to a temp file, extract with `pdftotext -layout`
+  (Git for Windows ships it; fall back to `py -3.11` with pypdf), write "[p. N]" page markers, delete the PDF and keep
+  only the text capture. YouTube: auto or manual subtitles via yt-dlp (vi, then en) converted to "[mm:ss] text" lines;
+  fall back to youtube_transcript_api through `py -3.11`. Wikipedia: the plain-text extract. Captures are capped at
+  about 400 KB with a truncation note.
+
+Ranking (documented in the guide, every score comes with its reasons): type priority from the source policy
+(course > official docs > paper > book/tutorial > video/blog), relevance (query and module keywords in title and
+abstract), authority (log-scaled citations for papers, official domains and organisations, channel for videos),
+recency (configurable half-life, not for classics), open access available, language match.
+
+Courtesy and law: a clear User-Agent ("Polaris/0.2 (personal study course builder; https://github.com/DuongNAD)"),
+per-provider rate limits, robots.txt honoured for HTML page fetches, open-access full text only (never paywalled or
+pirated copies), captures stay git-ignored and are only for personal study.
+
 ## Status
 - 2026-10-10: v0.1 built and verified (MCP stdio server, CLI, Zod schemas with corrective error suggestions, source capture for web/arXiv/local, quality gates, Vietnamese ROADMAP.md rendering, e2e test suite passing).
