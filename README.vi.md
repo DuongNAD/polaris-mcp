@@ -132,7 +132,18 @@ flowchart TD
   L4 -.-> A2
 ```
 
+### Hệ sinh thái
+
+| Dự án | Vai trò |
+|---|---|
+| **Polaris** (repo này) | Kiến trúc sư thiết kế khóa học |
+| **[Aurora Slides](https://github.com/DuongNAD/aurora-slides-mcp)** | Bài giảng, thực hành và luồng sự kiện tiến độ |
+| **[SmartDrive-OS](https://github.com/DuongNAD/smart-drive-os)** | Quản trị ổ SSD, tìm kiếm thông minh theo facts/sources/captures, bảo vệ thư mục môn học, hook cập nhật chỉ mục sau khi ghi |
+| **[Constellation](https://github.com/DuongNAD/constellation-mcp)** | Một bản kê (manifest) duy nhất, đăng ký vào Claude Code / Antigravity / Cursor / Codex, kiểm tra sức khỏe, chẩn đoán lệch cấu hình (drift doctor), cập nhật |
+
 ### Cài đặt hai máy chủ MCP song hành
+
+Khi đã cài đặt Constellation, `constellation register --dry-run` rồi `constellation register` sẽ giữ cho cấu hình của mọi agent luôn đồng bộ.
 
 #### Qua Claude Code CLI (`claude mcp add`)
 ```bash
@@ -210,7 +221,7 @@ Mỗi tài liệu được chấm điểm (0-100) kèm lý do rõ ràng:
    - Giữ nguyên định dạng xuống dòng và chống trùng lặp qua `polaris/tasks-map.json`.
 
 4. **Đồng bộ tiến độ & Ôn tập ngắt quãng (`polaris_progress_sync`, `polaris_today`):**
-   - `polaris_progress_sync` đọc file `progress.jsonl` do preview server của Aurora hoặc người học xuất ra (hỗ trợ các trường tùy chọn trong Aurora 0.6.1+: `chosenText`, `answerText`, `explanation`).
+   - `polaris_progress_sync` đọc file `progress.jsonl` do preview server của Aurora hoặc người học xuất ra (hỗ trợ các trường tùy chọn trong Aurora 0.6.1+: `chosenText`, `answerText`, `explanation`). Định nghĩa chuẩn hóa có phiên bản (canonical, versioned) kèm JSON Schema và fixtures được lưu tại [contracts của Constellation](https://github.com/DuongNAD/constellation-mcp/tree/main/contracts), cùng với các learning-unit markers, hook cập nhật sau ghi (post-write hook) và nhãn nguồn tài liệu; tài liệu README này chỉ tóm lược lại các quy chuẩn đó.
    - Tự động ghi các lỗi trắc nghiệm (hiển thị văn bản phương án hoặc chỉ số, lời giải thích, và dòng nhắc tự điền nguyên nhân), lệch dự đoán code (hiển thị dự đoán, kết quả thật, và dòng nhắc mental model) và trạm trí nhớ quên (hiển thị trạm, ý cần nhớ, và dòng nhắc củng cố neo) vào `polaris/errorlog.md` ("Sổ lỗi").
    - Lập lịch ôn tập ngắt quãng D+1, D+3, D+7, D+16, D+35 trong `polaris/reviews.json`.
    - `polaris_today` tính toán phiên học 30p/60p và cập nhật khối `## Today's Dynamic Goal` vào `ACTIVE_LEARNING.md` của Hub.
@@ -224,6 +235,8 @@ Polaris cung cấp 4 quy trình prompt mẫu:
 - **`research`**: Tìm kiếm tài liệu chuyên sâu cho một module cụ thể trên tất cả các provider không cần API key.
 
 ## Kết nối máy chủ MCP
+
+Khi đã cài đặt Constellation, `constellation register --dry-run` rồi `constellation register` sẽ giữ cho cấu hình của mọi agent luôn đồng bộ.
 
 ### Dành cho Claude Code
 Thêm vào file cấu hình `.mcp.json` của dự án hoặc `~/.claude.json`:

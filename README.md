@@ -132,7 +132,18 @@ flowchart TD
   L4 -.-> A2
 ```
 
+### Ecosystem
+
+| Project | Role |
+|---|---|
+| **Polaris** (this repo) | Course architect |
+| **[Aurora Slides](https://github.com/DuongNAD/aurora-slides-mcp)** | Lessons, practice, and progress events |
+| **[SmartDrive-OS](https://github.com/DuongNAD/smart-drive-os)** | SSD governance, learning-aware search over facts/sources/captures, protection of subject folders, post-write index hook |
+| **[Constellation](https://github.com/DuongNAD/constellation-mcp)** | One manifest, registration into Claude Code / Antigravity / Cursor / Codex, health checks, drift doctor, updates |
+
 ### Side-by-Side Installation
+
+With Constellation installed, `constellation register --dry-run` then `constellation register` keeps every agent config in sync.
 
 #### Claude Code CLI (`claude mcp add`)
 ```bash
@@ -210,7 +221,7 @@ Every result receives a transparent score (0-100) and evaluation reasons:
    - Preserves line endings and prevents duplicates using `polaris/tasks-map.json`.
 
 4. **Closed-Loop Progress & Spaced Repetition (`polaris_progress_sync`, `polaris_today`):**
-   - `polaris_progress_sync` reads `<course_dir>/progress.jsonl` from Aurora preview server or exported files (supporting Aurora 0.6.1+ optional quiz fields `chosenText`, `answerText`, and `explanation`).
+   - `polaris_progress_sync` reads `<course_dir>/progress.jsonl` from Aurora preview server or exported files (supporting Aurora 0.6.1+ optional quiz fields `chosenText`, `answerText`, and `explanation`). The canonical, versioned definition with JSON Schema and fixtures lives in [Constellation's contracts](https://github.com/DuongNAD/constellation-mcp/tree/main/contracts), together with the learning-unit markers, the post-write hook and the source labels; this README summarizes them.
    - Ingests incorrect quiz answers (displaying option texts or indices, explanations, and prompt for root cause), predict-run gaps (displaying predictions, actual output, and reflection prompt), and missed memory palace stations (displaying place, item, and hook prompt) into `polaris/errorlog.md` ("Sổ lỗi").
    - Schedules spaced repetition reviews at D+1, D+3, D+7, D+16, and D+35 in `polaris/reviews.json`.
    - `polaris_today` calculates 30m/60m session plans and writes `## Today's Dynamic Goal` to the hub's `ACTIVE_LEARNING.md`.
@@ -224,6 +235,8 @@ Polaris provides 4 prompt workflows:
 - **`research`**: Targeted deep-dive research hunt for a specific module across all keyless providers.
 
 ## MCP Server Connection
+
+With Constellation installed, `constellation register --dry-run` then `constellation register` keeps every agent config in sync.
 
 ### For Claude Code
 Add to your project's `.mcp.json` or `~/.claude.json`:
