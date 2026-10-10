@@ -1,0 +1,44 @@
+{
+  "name": "polaris-mcp",
+  "version": "0.1.0",
+  "description": "MCP server and CLI that gives coding agents structure to build personal evidence-based study courses.",
+  "author": "DuongNAD (https://github.com/DuongNAD)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DuongNAD/polaris-mcp.git"
+  },
+  "type": "module",
+  "main": "dist/polaris.mjs",
+  "bin": {
+    "polaris": "dist/polaris.mjs"
+  },
+  "files": [
+    "dist",
+    "guide",
+    "README.md",
+    "README.vi.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node scripts/build.mjs --check",
+    "e2e": "node scripts/e2e.mjs",
+    "start": "node dist/polaris.mjs"
+  },
+  "engines": {
+    "node": ">=22.4"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "study-course",
+    "roadmap",
+    "evidence-based-learning",
+    "self-study",
+    "education"
+  ],
+  "license": "MIT",
+  "polaris": {
+    "note": "No dependencies here on purpose: the toolchain lives in POLARIS_TOOLCHAIN or %LOCALAPPDATA%/aurora-slides/toolchain. Never run npm install in this folder."
+  }
+}

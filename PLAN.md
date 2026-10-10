@@ -119,4 +119,4 @@ smart-drive MCP; NotebookLM and DeepTutor answers are registered as sources with
 No other runtime dependencies in v0.1.
 
 ## Status
-- 2026-10-10: plan written; v0.1 to be built.
+- 2026-10-10: v0.1 built and verified (MCP stdio server, CLI, Zod schemas with corrective error suggestions, source capture for web/arXiv/local, quality gates, Vietnamese ROADMAP.md rendering, e2e test suite passing).

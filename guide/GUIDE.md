@@ -1,0 +1,130 @@
+# Polaris MCP Guide
+
+Polaris gives coding agents (Claude Code, Google Antigravity) the deterministic structure, persistence, capture tools, and quality gates to build evidence-based personal study courses.
+
+## overview
+
+Polaris operates on five core principles:
+1. **The agent reasons, Polaris structures:** Every artifact is strictly validated with JSON Schema (Zod) and rendered into clean Markdown or Aurora lesson outlines. Errors are actionable and corrective ("did you mean...").
+2. **Evidence first:** Every factual bullet of a roadmap points to facts; every fact points to a source plus a precise locator (timestamp, page, section, lines). Labels distinguish primary truth (`course`), extensions (`extension`), and unverified claims (`unverified`).
+3. **Learner fit:** The learner profile drives language (Vietnamese by default with correct diacritics), session recipes, study techniques (theory -> memory anchors -> paper notebook -> practice easy-to-hard -> recall walk; predict-then-run for code), and constraints.
+4. **Quality gates:** The pipeline checks brief completeness, source labels and quality scores, fact locators, outcome coverage, dependency DAG cycles, and flags overclaims before finalizing the roadmap.
+5. **Files, not databases:** Plain JSON and Markdown inside the subject folder (`polaris/brief.json`, `sources.json`, `facts.json`, `roadmap.json`, `captures/`). Captured third-party text is kept local and git-ignored.
+
+## pipeline
+
+The Polaris workflow follows 4 distinct stages:
+
+1. **Profile & Initiation (`polaris_profile`, `polaris_start`):**
+   - Check the learner's study methods, session lengths, taste, and hard calendar commitments.
+   - Initialize the course brief with measurable outcome criteria (`check`), start date, hours per week, and sources of truth.
+   - Polaris creates the `<subject>/polaris/` directory and sets up `.gitignore` for captures.
+
+2. **Source Registry & Capture (`polaris_source_add`, `polaris_sources`):**
+   - Register primary course materials, papers (arXiv IDs or URLs), web pages, and local files.
+   - Polaris automatically captures clean text/metadata into `captures/<id>.md` with 20 s timeout and zero external API dependencies.
+   - Sources are de-duplicated automatically by URL, path, or arXiv ID.
+
+3. **Fact Extraction (`polaris_fact_add`, `polaris_facts`):**
+   - Extract discrete claims from sources, written in learner language.
+   - Every fact must have a valid locator (e.g. `02:13`, `p. 4`, `Sec. 2.1`, `lines 12-25`).
+   - Numerical and date claims must have cross-checking sources or carry the `unverified` label.
+
+4. **Roadmap & Quality Gates (`polaris_roadmap_save`, `polaris_check`):**
+   - Structure modules with clear why, 2+ outputs, core points citing facts, misconceptions with fixes, materials with minutes, 3 practice tiers with DoD, 4+ self-check questions with `<details>` answers, and checkpoints.
+   - Validate through automated quality gates.
+   - Render the complete, gold-standard `ROADMAP.md` in Vietnamese with Mermaid dependency diagrams and generated references.
+
+## gates
+
+Quality gates run during `polaris_check` and `polaris_roadmap_save`:
+
+- **Brief:**
+  - `hoursPerWeek` > 0 and `start` date (YYYY-MM-DD) must be defined.
+  - Every outcome must have a testable, measurable `check` condition.
+- **Sources:**
+  - At least one source must carry the `course` label (primary source of truth).
+  - Every source must have a label (`course`, `extension`, `unverified`) and a quality score (1-5) with `why`.
+- **Facts:**
+  - Every fact must point to an existing source in `sources.json`.
+  - Every fact must have a non-empty locator.
+  - Numbers and dates must either have `crossCheck` sources or carry the `unverified` label.
+- **Roadmap:**
+  - Every brief outcome must be covered by at least one module output.
+  - Every module must have:
+    - Non-empty `why`.
+    - At least 2 `outputs`.
+    - `core` bullets that cite valid fact IDs from `facts.json`.
+    - At least 1 `misconception` with `wrong` and `fix`.
+    - `materials` whose total minutes fit the module's estimated hours.
+    - 3 `practice` tiers (`warmup`, `core`, `challenge`), each with `task` and `dod`.
+    - At least 4 `selfCheck` questions with answers; if code/scripts are involved, at least one question must have `level: "predict"`.
+    - Non-empty `checkpoint`.
+  - Module dependencies must form a Directed Acyclic Graph (DAG) with no circular dependency cycles.
+  - Total module hours should fit the available time budget.
+- **Language / Claims:**
+  - Flags absolute overclaims such as "100%", "luôn luôn", "tuyệt đối", "always", "every model", "không bao giờ sai".
+
+## sources
+
+**Source Priority Policy:**
+1. **The learner's own course materials:** (Priority 1, label: `course`, source of truth) — official video transcripts, official notebooks, instructor slides.
+2. **Official documentation and specifications:** (Priority 2, label: `course` or `extension`) — Python docs, framework docs, ROCm docs, MCP spec.
+3. **Primary research papers:** (Priority 3, label: `extension`) — arXiv papers, peer-reviewed publications.
+4. **Reputable books and curated tutorials:** (Priority 4, label: `extension`).
+5. **Community videos and blog posts:** (Priority 5, label: `extension` or `unverified`).
+
+**Best Practices:**
+- Summarize in your own words; quote only short, crucial passages.
+- Capture third-party text locally in `captures/<id>.md` (git-ignored, personal study copy).
+- For local files, search with the `smart-drive` MCP; never run recursive scans across D:.
+- NotebookLM and DeepTutor answers should be registered with the notebook topic and prompt as locator.
+
+## roadmap
+
+The rendered `ROADMAP.md` mirrors the gold-standard 10-section layout in Vietnamese:
+- **Header Quote:** Goal statement, relative file path, and primary source of truth.
+- **Mục lục:** Clickable Table of Contents for all 10 sections.
+- **1. Cách dùng lộ trình này:** Explains labels (`**[Khóa học]**`, `**[Mở rộng]**`, `**(chưa xác minh)**`), the module study loop, and session recipes (60 min: 5 review + 10 study + 35 practice + 7 self-check + 3 plan; 30 min: 5 review + 25 task; 90 min lab).
+- **2. Bức tranh toàn cảnh:** 2.1 Năng lực đầu ra, 2.2 Bản đồ module (Mermaid flowchart TD), 2.3 Kiến thức nền cần có + Quick self-test in `<details>`, 2.4 Ngân sách thời gian.
+- **3. Trạng thái hiện tại và lịch:** 3.1 Bạn đang ở đây, 3.2 Lịch theo tuần.
+- **4. Các module:**
+  - Vì sao học
+  - Đầu ra (≥ 2 items)
+  - Kiến thức cốt lõi (labeled with citations)
+  - Hiểu lầm và lỗi hay gặp
+  - Tài liệu (with minute estimates)
+  - Thực hành (3 tiers: Khởi động, Cốt lõi, Thử thách with DoD)
+  - Tự kiểm tra (≥ 4 questions with hidden answers in `<details>`)
+  - Checkpoint
+- **5. Ôn tập giãn cách và ôn xen kẽ:** Spaced repetition table (D+1, D+3, D+7, D+21/D+35) and interleaved review topics.
+- **6. Dự án tổng hợp:** Capstone project description, scope, and Definition of Done.
+- **7. Sổ lỗi và cách hỏi DeepTutor:** Error log entry format and 5-level scaffolding prompt guide.
+- **8. Tài liệu cũ trong thư mục này:** Reference table of legacy documents.
+- **9. Theo dõi tiến độ:** Checklist of completed modules and milestones.
+- **10. Nguồn tham khảo:** Generated bibliography table from `sources.json`.
+
+## learner
+
+**The Learner Method & Preferences:**
+- **Language:** Vietnamese for all learner-facing text (with correct diacritics, clear grammar, and natural teaching tone). English for code, JSON keys, and tool names.
+- **Pedagogy:**
+  - Theory -> Memory anchors -> Paper notebook summary (4-8 lines) -> Practice easy-to-hard -> Recall walk.
+  - Predict-then-run: Write predictions for code/commands before running; gaps go to "Sổ lỗi" (Error Log).
+  - 3-tier practice: Khởi động (warmup, 15 min), Cốt lõi (core, 45 min), Thử thách (challenge, 30 min).
+- **Memory Anchors:**
+  - *Memory Palace:* Walking a familiar home route for ordered lists and sequences.
+  - *Picture Anchors:* Vivid, concrete images for abstract terms.
+  - *Analogy:* Mapping a new concept to something well-known, stating where the analogy breaks.
+  - *Mnemonic:* Rhythmic or memorable phrases.
+- **Visual Taste:** Apple-keynote aesthetic, no emoji, no neon colors.
+- **Calendar:** Hard commitments (e.g. P0 courses) take absolute priority over P2 self-study tracks.
+
+## rules
+
+**Core Rules for Coding Agents:**
+1. **Never write assignment solutions:** Respect the learning hub's rules (`AGENTS.md`). Provide hints, leading questions, and mental models; never write the learner's solution code.
+2. **Evidence first:** Never invent facts, numbers, or dates. Quote with locators.
+3. **No recursive disk scans:** Never run recursive scans on D: (`find`, `grep -r`, `dir /s`, `Get-ChildItem -Recurse`). Open files directly or query `smart-drive`.
+4. **Toolchain discipline:** Never run `npm install` on D: (exFAT drive with 512 KB clusters). All dependencies live in `POLARIS_TOOLCHAIN`.
+5. **No paid API dependencies:** Polaris uses built-in fetchers, local parsers, and keyless public endpoints (e.g. export.arxiv.org).
