@@ -1,6 +1,10 @@
 [English](README.md)
 
+<p align="center"><img src="docs/banner.jpg" alt="Polaris MCP — vệt sao xoay quanh sao Bắc Cực" width="100%"></p>
+
 # Polaris MCP
+
+*Được đặt tên theo Polaris, ngôi sao Bắc Cực: cả bầu trời xoay quanh nó, tựa như lộ trình giữ cho mỗi bài học luôn đúng hướng.*
 
 Polaris là một máy chủ Model Context Protocol (MCP) và giao diện dòng lệnh (CLI) giúp các coding agent (Claude Code, Google Antigravity, Cursor) có được cấu trúc, sự bền vững dữ liệu, công cụ khám phá nghiên cứu (research engine), thu thập tài liệu, lập lịch trình học tập, xuất khóa học trình chiếu và các rào chắn chất lượng (quality gates) để xây dựng lộ trình học tập cá nhân hóa dựa trên bằng chứng (evidence-based).
 

@@ -1,6 +1,10 @@
 [Tiếng Việt](README.vi.md)
 
+<p align="center"><img src="docs/banner.jpg" alt="Polaris MCP — star trails around the North Star" width="100%"></p>
+
 # Polaris MCP
+
+*Named after Polaris, the North Star: the whole sky turns around it, the way a roadmap keeps every lesson on course.*
 
 Polaris is a Model Context Protocol (MCP) server and command-line interface (CLI) that gives coding agents (Claude Code, Google Antigravity, Cursor) the deterministic structure, persistence, research discovery, source capture, schedule planning, slide deck export, and quality gates to build personalized, evidence-based study courses.
 
