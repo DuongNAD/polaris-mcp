@@ -171,7 +171,7 @@ async function startMcp(): Promise<void> {
       inputSchema: {
         subject_dir: z.string().min(1).describe("Subject directory path"),
         brief: z.union([z.record(z.string(), z.unknown()), z.string()]).describe(
-          'Brief JSON: {"subject", "slug"?, "goal", "outcomes": [{"id", "text", "check"}], "start", "hoursPerWeek", "sourcesOfTruth": [...], "deadline"?}',
+          'Brief JSON: {"subject", "slug"?, "goal", "outcomes": [{"id", "text", "check"}], "start", "hoursPerWeek", "sourcesOfTruth": [...], "deadline"?, "roadmapPath"? (render the roadmap elsewhere so a learner\'s own ROADMAP.md is never overwritten)}',
         ),
       },
       annotations: { destructiveHint: true, idempotentHint: true, openWorldHint: true },
@@ -329,6 +329,7 @@ async function startMcp(): Promise<void> {
               author: z.string().optional(),
               date: z.string().optional(),
               url: z.string().optional(),
+              oaUrl: z.string().optional().describe("Open-access URL when primary publisher URL is paywalled or bot-walled"),
               path: z.string().optional(),
               label: z.enum(["course", "extension", "unverified"]).default("course"),
               quality: z.object({ score: z.number().int().min(1).max(5), why: z.string() }).optional(),

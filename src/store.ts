@@ -216,6 +216,8 @@ export async function addSources(
       const captured = await captureSource(sId, {
         kind: typeof item.kind === "string" ? item.kind : undefined,
         url,
+        oaUrl: typeof item.oaUrl === "string" ? item.oaUrl : undefined,
+        doi: typeof item.doi === "string" ? item.doi : undefined,
         path: typeof item.path === "string" ? item.path : undefined,
         title: typeof item.title === "string" ? item.title : undefined,
       }, p.capturesDir);
@@ -225,6 +227,10 @@ export async function addSources(
       if (captured.author) item.author = item.author || captured.author;
       if (captured.date) item.date = item.date || captured.date;
       if (captured.captureRelPath) item.capture = captured.captureRelPath;
+      if (captured.oaUrl) item.oaUrl = captured.oaUrl;
+      if (captured.note) {
+        item.notes = item.notes ? `${item.notes} | ${captured.note}` : captured.note;
+      }
 
       const v = validateSource(item);
       if (!v.ok || !v.value) {

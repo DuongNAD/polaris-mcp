@@ -204,6 +204,99 @@ try { await polarisLib.assertSafeUrl("file:///C:/Windows/win.ini"); } catch (e) 
 ok("POLARIS_ALLOW_PRIVATE_URLS=1 still refuses file scheme", errFileWithOptIn.includes("Refused: scheme"), errFileWithOptIn);
 delete process.env.POLARIS_ALLOW_PRIVATE_URLS;
 
+/* ───────── 1.8 Facts Gate False Positives & Quantities (Unit Tests) ───────── */
+console.log("\n--- Facts Gate False Positives & Numeric Quantities (Unit Tests) ---");
+
+// Exempt facts: math notation, Big-O, indices, norms, LaTeX, code tokens
+const exemptClaims = [
+  "Hệ số xác định R^2 phản ánh mức độ phù hợp của mô hình tuyến tính",
+  "Trong không gian 1D, bài toán tối ưu hóa quy về tìm cực trị của hàm đơn biến",
+  "Nghịch đảo ma trận hiệp phương sai có độ phức tạp thời gian O(d^3)",
+  "Regularization với chuẩn L2 (Ridge) giúp làm mượt trọng số",
+  "Đạo hàm của hàm mất mát bình phương chứa số hạng $x^2$",
+  "Hàm huấn luyện nhận tham số lặp mặc định `n_iter=100`",
+];
+
+for (const claim of exemptClaims) {
+  ok(
+    `claim exempt from numeric cross-check: "${claim.slice(0, 35)}..."`,
+    !polarisLib.hasNumericOrDateClaim(claim),
+  );
+}
+
+const mockSources = [
+  {
+    id: "S_mock",
+    kind: "local",
+    title: "Course Textbook",
+    label: "course",
+    quality: { score: 5, why: "Course source of truth" },
+  },
+];
+
+const exemptFacts = exemptClaims.map((claim, idx) => ({
+  id: `FE${idx + 1}`,
+  claim,
+  source: "S_mock",
+  locator: `p. ${idx + 1}`,
+  label: "course",
+  modules: ["M1"],
+}));
+
+const reportExempt = polarisLib.checkQualityGates({
+  sources: mockSources,
+  facts: exemptFacts,
+});
+const factErrorsExempt = reportExempt.errors.filter((i) => i.category === "facts");
+ok("exempt mathematical/code facts pass quality gates without crossCheck", factErrorsExempt.length === 0, `${factErrorsExempt.length} issues`);
+
+// Quantity facts: real measurements, percentages, years must still require crossCheck or unverified label
+const quantityClaims = [
+  "Mô hình đạt hiệu năng xử lý 50 TOPS",
+  "Độ chính xác nhận diện trên tập benchmark đạt 92%",
+  "Phương pháp được công bố trong tài liệu năm 2023",
+];
+
+for (const claim of quantityClaims) {
+  ok(
+    `claim flagged as numeric/date quantity: "${claim}"`,
+    polarisLib.hasNumericOrDateClaim(claim),
+  );
+}
+
+const quantityFacts = quantityClaims.map((claim, idx) => ({
+  id: `FQ${idx + 1}`,
+  claim,
+  source: "S_mock",
+  locator: `p. 1${idx}`,
+  label: "course",
+  modules: ["M1"],
+}));
+
+const reportQty = polarisLib.checkQualityGates({
+  sources: mockSources,
+  facts: quantityFacts,
+});
+const factErrorsQty = reportQty.errors.filter((i) => i.category === "facts");
+ok(
+  "real quantities without crossCheck are flagged by quality gates",
+  factErrorsQty.length === 3 && factErrorsQty.every((i) => i.message.includes("contains numeric or date claims")),
+  `flagged ${factErrorsQty.length}/3 quantity facts`,
+);
+
+// Quantity facts with crossCheck or marked unverified pass
+const verifiedQuantityFacts = [
+  { ...quantityFacts[0], crossCheck: ["S_mock"] },
+  { ...quantityFacts[1], crossCheck: ["S_mock"] },
+  { ...quantityFacts[2], label: "unverified" },
+];
+const reportQtyVerified = polarisLib.checkQualityGates({
+  sources: mockSources,
+  facts: verifiedQuantityFacts,
+});
+const factErrorsQtyVerified = reportQtyVerified.errors.filter((i) => i.category === "facts");
+ok("quantity facts with crossCheck or 'unverified' label pass quality gates", factErrorsQtyVerified.length === 0);
+
 /* ───────── 2. Local Fixture HTTP Server ───────── */
 
 const fixtureHtml = `<!DOCTYPE html>
@@ -230,10 +323,134 @@ const fixtureHtml = `<!DOCTYPE html>
 </body>
 </html>`;
 
+const oaHtml = `<!DOCTYPE html>
+<html>
+<head>
+  <title>ReAct: Synergizing Reasoning and Acting in Language Models (OA Copy)</title>
+</head>
+<body>
+  <main>
+    <article>
+      <h1>ReAct: Synergizing Reasoning and Acting in Language Models (OA Copy)</h1>
+      <p>Open-access preprint full text version of ReAct reasoning and acting in LLMs.</p>
+    </article>
+  </main>
+</body>
+</html>`;
+
 const httpServer = createServer((req, res) => {
+  if (req.url === "/robots.txt") {
+    res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("User-agent: *\nDisallow: /oa_disallowed/\n");
+    return;
+  }
   if (req.url === "/redirect_to_loopback") {
     res.writeHead(302, { Location: `http://127.0.0.1:${httpPort}/react_paper.html` });
     res.end();
+    return;
+  }
+  if (req.url === "/publisher/10.1234/react_paper") {
+    res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
+    res.end("<html><body><h1>403 Forbidden - Publisher Paywall</h1></body></html>");
+    return;
+  }
+  if (req.url === "/normal_long_article.html") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    const repeatedProse = `<p>Addressing the scaling challenge of distributed neural model execution requires robust fault tolerance and consensus. When node authentication tokens become invalid during long-running checkpoint synchronizations, an unexpected access denied exception may be generated in secondary clusters. Engineers must design retry protocols that distinguish intermittent network blips from permanent security check rejections. Modern distributed systems mitigate these risks using lease-based tokens.</p>`;
+    res.end(`<!DOCTYPE html>
+<html>
+<head>
+  <title>Engineering Reliable Machine Learning at Scale</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://www.google.com/recaptcha/api.js"></script>
+</head>
+<body>
+  <main>
+    <article>
+      <h1>Engineering Reliable Machine Learning at Scale</h1>
+      ${repeatedProse.repeat(6)}
+    </article>
+  </main>
+</body>
+</html>`);
+    return;
+  }
+  if (req.url === "/publisher/10.5678/cf_challenge_paper") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(`<!DOCTYPE html>
+<html>
+<head>
+  <title>Just a moment...</title>
+  <script src="/cdn-cgi/challenge-platform/h/g/scripts/jsd/main.js"></script>
+</head>
+<body>
+  <p>Checking your browser before accessing the site.</p>
+</body>
+</html>`);
+    return;
+  }
+  if (req.url?.includes("10.5678/cf_challenge_paper")) {
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(
+      JSON.stringify({
+        title: "Scaling Challenge Paper (OA Copy)",
+        best_oa_location: {
+          landing_page_url: `http://127.0.0.1:${httpPort}/oa_cf_resolved.html`,
+        },
+      }),
+    );
+    return;
+  }
+  if (req.url === "/oa_cf_resolved.html") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(`<!DOCTYPE html><html><head><title>Scaling Challenge Paper (OA Copy)</title></head><body><article><h1>Scaling Challenge Paper (OA Copy)</h1><p>Full open-access text resolved after Cloudflare interstitial challenge.</p></article></body></html>`);
+    return;
+  }
+  if (req.url === "/publisher/abstract_only_paper") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(`<!DOCTYPE html><html><head><title>Publisher Abstract Page</title></head><body><article><h1>Publisher Abstract Page</h1><p>This is a 20-word publisher paywalled abstract.</p></article></body></html>`);
+    return;
+  }
+  if (req.url === "/oa_full_text_paper.html") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(`<!DOCTYPE html><html><head><title>Complete Open Access Study</title></head><body><article><h1>Complete Open Access Study</h1><p>Full text complete 5000-word analysis with full data, experiments, and proofs from the repository.</p></article></body></html>`);
+    return;
+  }
+  if (req.url === "/downloads/paper.pdf") {
+    res.writeHead(200, { "Content-Type": "application/pdf" });
+    res.end("%PDF-1.4 dummy");
+    return;
+  }
+  if (req.url === "/oa_landing_page.html") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(`<!DOCTYPE html><html><head><title>Landing Page Article</title></head><body><main><article><h1>Landing Page Article</h1><p>Extracted full text from HTML landing page instead of running pdftotext.</p></article></main></body></html>`);
+    return;
+  }
+  if (req.url === "/publisher/robots_test_paper") {
+    res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
+    res.end("<html><body>403 Forbidden</body></html>");
+    return;
+  }
+  if (req.url === "/oa_disallowed/blocked_article.html") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end("<html><body>Secret Blocked Content</body></html>");
+    return;
+  }
+  if (req.url?.startsWith("/works/")) {
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(
+      JSON.stringify({
+        title: "ReAct: Synergizing Reasoning and Acting in Language Models (OA Copy)",
+        best_oa_location: {
+          landing_page_url: `http://127.0.0.1:${httpPort}/oa_react.html`,
+        },
+      }),
+    );
+    return;
+  }
+  if (req.url === "/oa_react.html") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(oaHtml);
     return;
   }
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
@@ -256,6 +473,171 @@ ok(
   errRedirect.includes("Refused: 127.0.0.1 resolves to a private or local address"),
   errRedirect,
 );
+
+// 2.1 Open-Access Fallback via Local Fixture Server
+console.log("\n--- Open-Access Fallback (Unit / Local Fixture Tests) ---");
+const oaCaptureDir = join(TEST_DIR, "oa_captures");
+mkdirSync(oaCaptureDir, { recursive: true });
+
+// Verify SSRF guard blocks private address on OA fallback hop when POLARIS_ALLOW_PRIVATE_URLS is unset
+delete process.env.POLARIS_ALLOW_PRIVATE_URLS;
+process.env.POLARIS_OPENALEX_URL = `http://127.0.0.1:${httpPort}`;
+let ssrfBlockedOa = false;
+try {
+  await polarisLib.captureSource(
+    "S_oa_ssrf",
+    { kind: "web", url: `http://127.0.0.1:${httpPort}/publisher/10.1234/react_paper` },
+    oaCaptureDir,
+  );
+} catch (e) {
+  ssrfBlockedOa = (e).message.includes("Refused: 127.0.0.1");
+}
+ok("OA fallback keeps SSRF guard on private addresses when opt-in unset", ssrfBlockedOa);
+
+// With POLARIS_ALLOW_PRIVATE_URLS=1, OA fallback discovers OA copy and captures it cleanly
+process.env.POLARIS_ALLOW_PRIVATE_URLS = "1";
+const capturedOa = await polarisLib.captureSource(
+  "S_oa_success",
+  {
+    kind: "web",
+    url: `http://127.0.0.1:${httpPort}/publisher/10.1234/react_paper`,
+    title: "ReAct Paywalled Paper",
+  },
+  oaCaptureDir,
+);
+ok("OA fallback captures content from open-access alternative", capturedOa.text.includes("Open-access preprint full text"));
+ok("OA fallback records oaUrl", capturedOa.oaUrl === `http://127.0.0.1:${httpPort}/oa_react.html`);
+ok("OA fallback records note explaining origin", capturedOa.note?.includes("via openalex") && capturedOa.note?.includes("HTTP 403"));
+
+const savedOaMd = readFileSync(join(oaCaptureDir, "S_oa_success.md"), "utf8");
+ok("OA fallback markdown records original URL and Open Access URL", savedOaMd.includes(`- URL: http://127.0.0.1:${httpPort}/publisher/10.1234/react_paper`) && savedOaMd.includes(`- Open Access URL: http://127.0.0.1:${httpPort}/oa_react.html`));
+ok("OA fallback markdown records note that never bypasses paywalls", savedOaMd.includes("Never bypasses paywalls"));
+
+// 1. Long article with cdnjs, recaptcha script, and "challenge"/"access denied" prose captures normally
+const longCaptured = await polarisLib.captureSource(
+  "S_long_article",
+  {
+    kind: "web",
+    url: `http://127.0.0.1:${httpPort}/normal_long_article.html`,
+    title: "Engineering Reliable Machine Learning at Scale",
+  },
+  oaCaptureDir,
+);
+ok(
+  "a long article page that loads cdnjs.cloudflare.com, includes a reCAPTCHA script and uses \"challenge\" and \"access denied\" in prose captures normally",
+  longCaptured.text.length >= 1500 &&
+    longCaptured.text.includes("scaling challenge") &&
+    longCaptured.text.includes("access denied") &&
+    longCaptured.oaUrl === undefined,
+  `Length: ${longCaptured.text.length}, oaUrl: ${longCaptured.oaUrl}`,
+);
+
+// 2. Short "Just a moment..." page with /cdn-cgi/challenge-platform/ triggers fallback
+const cfCaptured = await polarisLib.captureSource(
+  "S_cf_challenge",
+  {
+    kind: "web",
+    url: `http://127.0.0.1:${httpPort}/publisher/10.5678/cf_challenge_paper`,
+    title: "Cloudflare Challenge Paper",
+  },
+  oaCaptureDir,
+);
+ok(
+  "a short \"Just a moment...\" page with /cdn-cgi/challenge-platform/ triggers the fallback",
+  cfCaptured.oaUrl === `http://127.0.0.1:${httpPort}/oa_cf_resolved.html` &&
+    cfCaptured.text.includes("resolved after Cloudflare interstitial challenge") &&
+    (cfCaptured.note?.includes("bot wall") || cfCaptured.note?.includes("challenge")),
+  `oaUrl: ${cfCaptured.oaUrl}, note: ${cfCaptured.note}`,
+);
+
+// 3. Research/source item with oaUrl whose publisher URL answers 200 with short abstract page is captured from oaUrl
+const preferredOaCaptured = await polarisLib.captureSource(
+  "S_preferred_oa",
+  {
+    kind: "paper",
+    url: `http://127.0.0.1:${httpPort}/publisher/abstract_only_paper`,
+    oaUrl: `http://127.0.0.1:${httpPort}/oa_full_text_paper.html`,
+    title: "Preferred OA Source",
+  },
+  oaCaptureDir,
+);
+const savedPreferredMd = readFileSync(join(oaCaptureDir, "S_preferred_oa.md"), "utf8");
+ok(
+  "a research/source item with oaUrl whose publisher URL answers 200 with a short abstract page is captured from the oaUrl (full text) with both URLs recorded",
+  preferredOaCaptured.url === `http://127.0.0.1:${httpPort}/publisher/abstract_only_paper` &&
+    preferredOaCaptured.oaUrl === `http://127.0.0.1:${httpPort}/oa_full_text_paper.html` &&
+    preferredOaCaptured.text.includes("Full text complete 5000-word analysis") &&
+    !preferredOaCaptured.text.includes("20-word publisher paywalled abstract") &&
+    savedPreferredMd.includes(`- URL: http://127.0.0.1:${httpPort}/publisher/abstract_only_paper`) &&
+    savedPreferredMd.includes(`- Open Access URL: http://127.0.0.1:${httpPort}/oa_full_text_paper.html`) &&
+    savedPreferredMd.includes("Never bypasses paywalls"),
+  `url: ${preferredOaCaptured.url}, oaUrl: ${preferredOaCaptured.oaUrl}`,
+);
+
+// 4. An oaUrl that answers HTML in the PDF branch is captured as HTML
+const pdfBranchHtml = await polarisLib.captureSource(
+  "S_pdf_branch_html",
+  {
+    kind: "paper",
+    url: `http://127.0.0.1:${httpPort}/downloads/paper.pdf`,
+    oaUrl: `http://127.0.0.1:${httpPort}/oa_landing_page.html`,
+    title: "PDF Branch with HTML OA",
+  },
+  oaCaptureDir,
+);
+const savedPdfBranchMd = readFileSync(join(oaCaptureDir, "S_pdf_branch_html.md"), "utf8");
+ok(
+  "an oaUrl that answers HTML in the PDF branch is captured as HTML",
+  pdfBranchHtml.text.includes("Extracted full text from HTML landing page instead of running pdftotext") &&
+    savedPdfBranchMd.includes("Extracted by: Polaris MCP (html)"),
+  `preview: ${pdfBranchHtml.preview}`,
+);
+
+// 5. An oaUrl disallowed by robots.txt is skipped with an error
+let robotsBlockedErr = "";
+try {
+  await polarisLib.captureSource(
+    "S_robots_blocked_oa",
+    {
+      kind: "paper",
+      url: `http://127.0.0.1:${httpPort}/publisher/robots_test_paper`,
+      oaUrl: `http://127.0.0.1:${httpPort}/oa_disallowed/blocked_article.html`,
+      title: "Robots Blocked OA Paper",
+    },
+    oaCaptureDir,
+  );
+} catch (e) {
+  robotsBlockedErr = e.message;
+}
+
+const tempRobotsDir = join(TEST_DIR, "robots_test_subject");
+mkdirSync(join(tempRobotsDir, "polaris"), { recursive: true });
+writeFileSync(
+  join(tempRobotsDir, "polaris", "sources.json"),
+  JSON.stringify([
+    {
+      id: "S_robots_skip",
+      kind: "paper",
+      url: `http://127.0.0.1:${httpPort}/publisher/robots_test_paper`,
+      oaUrl: `http://127.0.0.1:${httpPort}/oa_disallowed/blocked_article.html`,
+      title: "Robots Blocked OA Paper",
+    },
+  ]),
+  "utf8",
+);
+const batchRobotsResult = await polarisLib.captureSources(tempRobotsDir, ["S_robots_skip"]);
+
+ok(
+  "an oaUrl disallowed by robots.txt is skipped with an error",
+  robotsBlockedErr.includes("robots.txt rules") &&
+    batchRobotsResult.captured.length === 0 &&
+    batchRobotsResult.errors.length > 0 &&
+    batchRobotsResult.errors[0].includes("robots.txt rules"),
+  `Direct: ${robotsBlockedErr}; Batch: ${batchRobotsResult.errors.join("; ")}`,
+);
+
+delete process.env.POLARIS_OPENALEX_URL;
+delete process.env.POLARIS_ALLOW_PRIVATE_URLS;
 
 const localNotePath = join(TEST_DIR, "lecture_notes.md");
 writeFileSync(
@@ -1232,7 +1614,7 @@ try {
   ok("CLI today", todayCli.includes("Kế hoạch phiên học") && todayCli.includes("## Today's Dynamic Goal"));
 
   const versionCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "version"], { encoding: "utf8" });
-  ok("CLI version 0.3.4", versionCli.trim() === "0.3.4");
+  ok("CLI version 0.3.5", versionCli.trim() === "0.3.5");
 
   const helpCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "help"], { encoding: "utf8" });
   ok("CLI help", helpCli.includes("Usage: node polaris.mjs") && helpCli.includes("progress <subject_dir>") && helpCli.includes("today <subject_dir>"));

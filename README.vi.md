@@ -57,7 +57,7 @@ Dự án song hành cùng [Aurora Slides MCP](https://github.com/DuongNAD/aurora
 
 > **Ghi chú về Cache API:** Toàn bộ dữ liệu bộ nhớ đệm tìm kiếm API 24 giờ được lưu tập trung tại cache hệ thống (`%LOCALAPPDATA%/polaris/cache` hoặc `POLARIS_CACHE_DIR`), giúp tiết kiệm dung lượng cụm đĩa exFAT.
 
-## Danh sách công cụ (v0.3.4)
+## Danh sách công cụ (v0.3.5)
 
 Polaris cung cấp 20 công cụ MCP chia theo 5 nhóm chức năng:
 
@@ -66,10 +66,10 @@ Polaris cung cấp 20 công cụ MCP chia theo 5 nhóm chức năng:
 |---|---|
 | `polaris_guide` | Tra cứu tài liệu hướng dẫn quy trình, rào chắn chất lượng, chính sách nguồn, công cụ nghiên cứu, lập lịch, xuất slide, theo dõi, đồng bộ tiến độ Aurora, kế hoạch ngày, quy trình tích hợp và phương pháp học. |
 | `polaris_profile` | Đọc (`get`) hoặc cập nhật (`update`) hồ sơ người học, khung giờ tuần (`slots`), ngày bận (`blackouts`) và công thức buổi học. |
-| `polaris_start` | Khởi tạo thư mục môn học, thiết lập `polaris/brief.json` và cấu hình `.gitignore`. |
+| `polaris_start` | Khởi tạo thư mục môn học, thiết lập `polaris/brief.json` và cấu hình `.gitignore`, hỗ trợ trường `roadmapPath` ("kết xuất lộ trình ra vị trí tùy biến để không bao giờ ghi đè lên file ROADMAP.md của người học"). |
 
-### 2. Nghiên cứu & Nguồn tài liệu (kèm Rào chắn SSRF)
-Toàn bộ các yêu cầu mạng ra ngoài (trang web, arXiv, PDF Open Access, Wikipedia, API provider và kiểm tra robots.txt) đều được bảo vệ bởi rào chắn SSRF: chỉ cho phép giao thức `http:` và `https:`; phân giải tên miền qua DNS (`node:dns`) và từ chối các địa chỉ nội bộ/cục bộ (loopback, mạng LAN riêng tư, link-local metadata 169.254.169.254, CGNAT, multicast, các dải dành riêng, IPv4-mapped IPv6 và localhost); theo dõi chuyển hướng thủ công (tối đa 5 bước nhảy) và kiểm tra lại trên từng bước. Sử dụng `POLARIS_ALLOW_PRIVATE_URLS=1` khi cần kiểm thử cục bộ có chủ đích.
+### 2. Nghiên cứu & Nguồn tài liệu (kèm Rào chắn SSRF & Fallback Open Access)
+Toàn bộ các yêu cầu mạng ra ngoài (trang web, arXiv, PDF Open Access, Wikipedia, API provider và kiểm tra robots.txt) đều được bảo vệ bởi rào chắn SSRF: chỉ cho phép giao thức `http:` và `https:`; phân giải tên miền qua DNS (`node:dns`) và từ chối các địa chỉ nội bộ/cục bộ (loopback, mạng LAN riêng tư, link-local metadata 169.254.169.254, CGNAT, multicast, các dải dành riêng, IPv4-mapped IPv6 và localhost); theo dõi chuyển hướng thủ công (tối đa 5 bước nhảy) và kiểm tra lại trên từng bước. Sử dụng `POLARIS_ALLOW_PRIVATE_URLS=1` khi cần kiểm thử cục bộ có chủ đích. Khi nguồn có `oaUrl` đã biết, Polaris ưu tiên thu thập bản open-access trước và giữ lại link gốc. Khi gặp URL bị chặn (401/403/429, lỗi mạng với DOI đã biết, hoặc bot wall interstitial < 1500 ký tự kèm dấu hiệu thử thách mạnh), Polaris tự động tìm kiếm bản Open Access hợp lệ qua OpenAlex và Unpaywall, kiểm tra robots.txt cho mọi URL và không bao giờ vượt tường trả phí.
 
 | Công cụ | Mô tả |
 |---|---|
@@ -345,6 +345,7 @@ Polaris hoạt động liền mạch cùng [SmartDrive-OS](https://github.com/Du
 
 | Phiên bản | Mô tả |
 |---|---|
+| **0.3.5** | Khắc phục các vấn đề phát hiện từ kiểm thử thực tế (dogfooding): Bỏ qua kiểm tra số học đối chiếu chéo (`crossCheck`) cho các quy ước toán học thông dụng (số mũ/chỉ số dưới `R^2`, `x^2`, `O(d^3)`, `O(n log n)`, `w_1`, `L1/L2`, `l1/l2`), thứ nguyên (`1D/2D/3D`, `n×d`), từ chỉ thứ tự cấu trúc (`bước 1`, `slide 3`, mã `M1/M2.1`, `F12/S3`, số trang trong locator), biểu thức LaTeX trong `$...$` và mã nội dòng; giữ nguyên kiểm tra cho các số đo thực nghiệm (phần trăm, đơn vị đo, ngày tháng, hệ số `22.22x`, `50 TOPS`); ưu tiên thu thập bản open-access đã biết (`oaUrl`) trước đồng thời lưu giữ link nhà xuất bản gốc; nhận diện bot wall interstitial (< 1500 ký tự với dấu hiệu thử thách mạnh) tránh bắt nhầm bài viết thông thường; dùng chung cơ chế thu thập HTML/PDF cho open-access; kiểm tra robots.txt cho cả URL open-access; tự động fallback sang Open Access qua OpenAlex và Unpaywall khi URL gặp 401/403/429 hoặc bot wall / captcha; tài liệu hóa trường `roadmapPath` trong brief. |
 | **0.3.4** | Rào chắn bảo mật SSRF: Chặn Server-Side Request Forgery trong thu thập nguồn tài liệu và tra cứu nghiên cứu. Chỉ cho phép giao thức http/https, phân giải host qua DNS (`node:dns`), từ chối loopback (127/8, ::1), unspecified (0.0.0.0, ::), dải mạng riêng tư (10/8, 172.16/12, 192.168/16, fc00::/7), link-local / metadata cloud (169.254/16, fe80::/10), CGNAT (100.64/10), multicast, các dải dành riêng, IPv4-mapped IPv6 và localhost/*.localhost. Thủ công kiểm tra chuyển hướng redirect (tối đa 5 bước nhảy) trên từng bước. Bật `POLARIS_ALLOW_PRIVATE_URLS=1` khi cần kiểm thử cục bộ có chủ đích. |
 | **0.3.3** | Tích hợp Vega MCP: Đọc số lượng thẻ Vega FSRS đến hạn (`<hub>/.vega/cards.json`) trong `polaris_today` kèm phân bổ 10 phút vào công thức buổi học; nhận diện và bỏ qua các sự kiện tiến độ loại "card" trong `polaris_progress_sync`. |
 | **0.3.2** | Tương thích ổ exFAT SSD và SmartDrive-OS: Di chuyển bộ nhớ đệm API tìm kiếm 24h ra ngoài thư mục môn học về cache hệ thống (%LOCALAPPDATA%/polaris/cache hoặc POLARIS_CACHE_DIR) kèm thông báo dọn dẹp cache cũ; thêm hook tự động báo SmartDrive cập nhật chỉ mục (coalesced 2s, POLARIS_SMARTDRIVE=off, POLARIS_SMARTDRIVE_CMD). |

@@ -123,6 +123,7 @@ export const SourceSchema = z.strictObject({
   author: z.string().optional(),
   date: z.string().optional(),
   url: z.string().optional(),
+  oaUrl: z.string().optional().describe("Open-access URL when primary publisher URL is paywalled or bot-walled"),
   path: z.string().optional(),
   label: z.enum(SOURCE_LABELS).describe("Label: course (primary truth) | extension | unverified"),
   quality: SourceQualitySchema,

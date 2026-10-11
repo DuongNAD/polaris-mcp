@@ -1149,16 +1149,25 @@ export async function runResearch(
           sid,
           {
             kind: item.kind,
-            url: item.oaUrl || item.url,
+            url: item.url,
+            oaUrl: item.oaUrl,
+            doi: item.doi,
             title: item.title,
           },
           p.capturesDir,
           true,
         );
 
+        const notesArr = [
+          newSourceInput.notes,
+          cap.note ? cap.note : undefined,
+        ].filter(Boolean);
+
         const v = validateSource({
           ...newSourceInput,
+          oaUrl: cap.oaUrl || item.oaUrl,
           capture: cap.captureRelPath,
+          notes: notesArr.length > 0 ? notesArr.join(" | ") : undefined,
         });
 
         if (v.ok && v.value) {

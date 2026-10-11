@@ -23,8 +23,74 @@ export interface CheckReport {
 }
 
 const OVERCLAIM_REGEX = /\b(100%|luôn luôn|tuyệt đối|always|every model|chắc chắn 100%|hoàn hảo 100%|không bao giờ sai)\b/i;
-const HAS_NUM_OR_DATE_REGEX = /\b(\d+(?:[.,]\d+)?%?|\d{4}-\d{2}-\d{2})\b/;
+export const HAS_NUM_OR_DATE_REGEX = /\b(\d+(?:[.,]\d+)?(?:x\b|%|\b)|\d{4}-\d{2}-\d{2})/i;
 const CODE_KEYWORDS_REGEX = /\b(code|python|script|api|function|hàm|lập trình|cú pháp|lệnh|terminal|cli|pydantic|mcp|vllm|class|def|import)\b/i;
+
+/**
+ * Strip mathematical notations, dimensions, ordinal/structural markers,
+ * LaTeX, and inline code from claim text before checking for empirical
+ * numeric/date claims that require cross-checking.
+ */
+export function stripNonQuantityTokens(claim: string): string {
+  let s = claim;
+
+  // 1. Code blocks and inline code: `n_iter=100`, ```...```
+  s = s.replace(/```[\s\S]*?```/g, " ");
+  s = s.replace(/`[^`\n]*`/g, " ");
+
+  // 2. LaTeX math expressions: $...$ and $$...$$
+  s = s.replace(/\$\$[\s\S]*?\$\$/g, " ");
+  s = s.replace(/\$[^$\n]+\$/g, " ");
+
+  // 3. Bracketed citations/locators: [p. 4], [pp. 12-15], [02:13], [#anchor]
+  s = s.replace(/\[[^\]]*\]/g, " ");
+
+  // 4. Ordinal/structural phrases:
+  // e.g. "bước 1", "slide 3", "trang 4", "page 12", "p. 5", "lines 12-25", "dòng 8"
+  s = s.replace(
+    /\b(?:bước|step|slide|trang|page|pp?\.|lines?|dòng|chương|chapter|phần|part|bài|lesson|mục|sec(?:tion|\.)?)\s*#?\d+(?:\.\d+)*(?:\s*[-–]\s*\d+(?:\.\d+)*)?\b/gi,
+    " ",
+  );
+
+  // 5. Conventional structural IDs: M1, M2.1, F12, S3, O1
+  s = s.replace(/\b[MFS]\d+(?:\.\d+)*\b/gi, " ");
+  s = s.replace(/\bO\d+\b/g, " ");
+
+  // 6. Big-O and complexity notations: O(d^3), O(n log n), O(n^2), O(1)
+  s = s.replace(/\b(?:Big-?O|Theta|Omega|[Oo]|Ω)\s*\([^)]*\)/g, " ");
+
+  // 7. Norms: L1, L2, l1, l2, L1/L2, l1/l2, L0, L_inf
+  s = s.replace(/\b[Ll]\d+(?:\s*[\/]\s*[Ll]\d+)?\b/g, " ");
+  s = s.replace(/\b[Ll]_\d+\b/g, " ");
+
+  // 8. Dimensions: 1D, 2D, 3D, 4D, 1-D, 2-D, 2D/3D, n×d, n x d, d x d, (n, 1)
+  s = s.replace(/\b\d+-?[dD](?:\s*[\/]\s*\d+-?[dD])?\b/g, " ");
+  s = s.replace(/\b[a-zA-Z]\s*[×x*]\s*[a-zA-Z]\b/g, " ");
+  s = s.replace(/\b[a-zA-Z]\s*[×x*]\s*\d+\b/g, " ");
+  s = s.replace(/\b\d+\s*[×x*]\s*[a-zA-Z]\b/g, " ");
+  s = s.replace(/\b\d+\s*×\s*\d+\b/g, " "); // unicode multiply e.g. 1920×1080
+  s = s.replace(/\(\s*[a-zA-Z0-9_]+\s*,\s*(?:\d+|[a-zA-Z0-9_]+)?\s*\)/g, " "); // shapes like (n, 1) or (n,)
+
+  // 9. Exponents and indices: R^2, x^2, w_1, a_12, R^(n x d), x²
+  s = s.replace(/\b[a-zA-Z]\^\([^)]+\)/g, " "); // R^(n x d)
+  s = s.replace(/(?:[a-zA-Z]|[)}\]])\^[+-]?\d+\b/g, " "); // R^2, x^2, (x)^2
+  s = s.replace(/\b[a-zA-Z][⁰¹²³⁴⁵⁶⁷⁸⁹]+\b/g, " "); // R², x²
+  s = s.replace(/\b[a-zA-Z]+_\d+\b/g, " "); // w_1, x_0
+  s = s.replace(/\b[a-zA-Z]+_\([a-zA-Z0-9_+ -]+\)/g, " "); // w_(t+1)
+
+  // 10. Math relation with 0 or 1: = 0, = 1, != 0, > 0, < 1
+  s = s.replace(/(?:[=><≥≤≠≈~]|approx|equals?)\s*[01]\b/gi, " ");
+
+  // 11. Conventional model names / hardware revisions: GPT-4, Llama-3
+  s = s.replace(/\b[A-Za-z]+-\d+(?:\.\d+)*\b/g, " ");
+
+  return s;
+}
+
+export function hasNumericOrDateClaim(claim: string): boolean {
+  const stripped = stripNonQuantityTokens(claim);
+  return HAS_NUM_OR_DATE_REGEX.test(stripped);
+}
 
 /** Detect cycles in module dependency graph */
 function detectDependencyCycles(modules: Array<{ id: string; depends?: string[] }>): string[][] {
@@ -172,8 +238,8 @@ export function checkQualityGates(params: {
       });
     }
 
-    // Number & date cross-check rule
-    if (HAS_NUM_OR_DATE_REGEX.test(f.claim)) {
+    // Number & date cross-check rule (ignores math/structural notation, flags real quantities)
+    if (hasNumericOrDateClaim(f.claim)) {
       const hasCrossCheck = Array.isArray(f.crossCheck) && f.crossCheck.length > 0;
       const isUnverified = f.label === "unverified";
       if (!hasCrossCheck && !isUnverified) {

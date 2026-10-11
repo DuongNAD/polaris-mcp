@@ -57,7 +57,7 @@ Sister project to [Aurora Slides MCP](https://github.com/DuongNAD/aurora-slides-
 
 > **Note on API Cache:** Regenerable search API responses (24h TTL) are stored in the global cache directory (`%LOCALAPPDATA%/polaris/cache` or `POLARIS_CACHE_DIR`), saving space on exFAT drives.
 
-## Tools (v0.3.4)
+## Tools (v0.3.5)
 
 Polaris exposes 20 specialized MCP tools across 5 major functional domains:
 
@@ -66,10 +66,10 @@ Polaris exposes 20 specialized MCP tools across 5 major functional domains:
 |---|---|
 | `polaris_guide` | Documentation on workflow, pipeline, quality gates, source policy, research engine, schedule, export, tracking, progress sync, today session planning, aurora workflow, and learner method. |
 | `polaris_profile` | Read (`get`) or update (`update`) learner preferences, weekly slots (`slots`), blackout dates (`blackouts`), and session recipes. |
-| `polaris_start` | Initialize `<subject>/polaris/` and save validated `brief.json` with measurable outcomes. |
+| `polaris_start` | Initialize `<subject>/polaris/` and save validated `brief.json` with measurable outcomes and optional `roadmapPath` ("render the roadmap elsewhere so a learner's own ROADMAP.md is never overwritten"). |
 
-### 2. Research & Sources (with SSRF Guard)
-All outbound network fetches (web pages, arXiv papers, open-access PDFs, Wikipedia, provider APIs, and robots.txt lookups) are guarded against Server-Side Request Forgery (SSRF): only `http:` and `https:` schemes are allowed; hosts are resolved and private/local addresses (loopback, private LAN, link-local cloud metadata 169.254.169.254, CGNAT, multicast, reserved ranges, IPv4-mapped IPv6, and localhost) are refused; redirects are followed manually (max 5 hops) and re-verified on every hop. Set `POLARIS_ALLOW_PRIVATE_URLS=1` to permit local addresses during deliberate testing.
+### 2. Research & Sources (with SSRF Guard & Open-Access Fallback)
+All outbound network fetches (web pages, arXiv papers, open-access PDFs, Wikipedia, provider APIs, and robots.txt lookups) are guarded against Server-Side Request Forgery (SSRF): only `http:` and `https:` schemes are allowed; hosts are resolved and private/local addresses (loopback, private LAN, link-local cloud metadata 169.254.169.254, CGNAT, multicast, reserved ranges, IPv4-mapped IPv6, and localhost) are refused; redirects are followed manually (max 5 hops) and re-verified on every hop. Set `POLARIS_ALLOW_PRIVATE_URLS=1` to permit local addresses during deliberate testing. When sources have a known `oaUrl`, Polaris captures the open-access copy first while preserving the original publisher link. When a publisher URL or DOI returns 401/403/429, a network failure with a known DOI, or a bot wall interstitial (< 1500 chars of text with strong challenge markers), Polaris queries OpenAlex and Unpaywall for legitimate open-access alternatives, respecting robots.txt on all URLs. Polaris never bypasses paywalls.
 
 | Tool | Description |
 |---|---|
@@ -345,6 +345,7 @@ Polaris integrates seamlessly with [SmartDrive-OS](https://github.com/DuongNAD/s
 
 | Version | Description |
 |---|---|
+| **0.3.5** | Polaris dogfood fixes: Intelligent facts gate false-positive exemptions for mathematical notation (exponents/indices `R^2`, `x^2`, `O(d^3)`, `O(n log n)`, `w_1`, `L1/L2`, `l1/l2`), dimensions (`1D/2D/3D`, `n×d`), structural markers (`bước 1`, `slide 3`, `M1/M2.1`, `F12/S3` IDs, locators), LaTeX inside `$...$`, and inline code, while strictly flagging empirical quantities (percentages, measurements, dates, statistics); prefers known open-access copies (`oaUrl`) first while keeping original publisher link; interstitial bot-wall detection (< 1500 chars with strong challenge markers) preventing false positives on normal articles; unified HTML/PDF open-access capture engine; robots.txt validation on open-access URLs; automatic Open-Access fallback via OpenAlex and Unpaywall when publisher URLs return 401/403/429/bot-wall (recording both original and `oaUrl` with notes and keeping SSRF guard on every hop); documented brief `roadmapPath` ("render the roadmap elsewhere so a learner's own ROADMAP.md is never overwritten"). |
 | **0.3.4** | SSRF Security Guard: Block Server-Side Request Forgery in source capture and research fetches. Outbound requests strictly allow http/https only, resolve hosts via DNS (`node:dns`), refuse loopback (127/8, ::1), unspecified (0.0.0.0, ::), private LANs (10/8, 172.16/12, 192.168/16, fc00::/7), link-local/cloud metadata (169.254/16, fe80::/10), CGNAT (100.64/10), multicast, reserved ranges, IPv4-mapped IPv6, and localhost/*.localhost. Follow redirects manually (max 5 hops) with re-validation on every hop. Opt-in `POLARIS_ALLOW_PRIVATE_URLS=1` for deliberate local testing. |
 | **0.3.3** | Vega MCP integration: Read-only load of due Vega FSRS cards (`<hub>/.vega/cards.json`) in `polaris_today` with 10-minute session recipe budget; silent handling of "card" progress events in `polaris_progress_sync`. |
 | **0.3.2** | Fit learner's exFAT SSD and SmartDrive-OS: Moved 24h regenerable API cache off subject folders to global cache (%LOCALAPPDATA%/polaris/cache or POLARIS_CACHE_DIR) with legacy cache cleanup notice; added non-blocking detached SmartDrive update hooks with per-folder 2s coalescing, POLARIS_SMARTDRIVE=off, and POLARIS_SMARTDRIVE_CMD. |

@@ -26,10 +26,126 @@ export interface CapturedContent {
   author?: string;
   date?: string;
   url?: string;
+  oaUrl?: string;
   path?: string;
   text: string;
   preview: string;
   captureRelPath?: string;
+  note?: string;
+}
+
+/** Extract DOI from a string, URL, or metadata text */
+export function extractDoi(str?: string): string | undefined {
+  if (!str) return undefined;
+  const urlMatch = /(?:doi(?:\.org)?\/|doi:\s*)(10\.\d{4,9}\/[^\s"'<>#?]+)/i.exec(str) ||
+    /\b(10\.\d{4,9}\/[^\s"'<>#?]+)/i.exec(str);
+  if (urlMatch) {
+    return urlMatch[1]!.replace(/[.,;)]+$/, "");
+  }
+  return undefined;
+}
+
+/** Check if HTTP response indicates a paywall, bot challenge wall, or rate-limit captcha */
+export function isBotWallOrCaptcha(status: number, html?: string): boolean {
+  if (status === 401 || status === 403 || status === 429) return true;
+  if (!html) return false;
+
+  const { title, text } = extractHtmlText(html);
+  if (text.length >= 1500) {
+    return false;
+  }
+
+  const titleLower = title.toLowerCase();
+  const hasStrongTitle =
+    titleLower.includes("just a moment") ||
+    (titleLower.includes("attention required") && titleLower.includes("cloudflare")) ||
+    titleLower.includes("access denied") ||
+    titleLower.includes("are you a robot") ||
+    titleLower.includes("verify you are human");
+
+  if (hasStrongTitle) {
+    return true;
+  }
+
+  const lower = html.toLowerCase();
+  const hasStrongMarker =
+    lower.includes("/cdn-cgi/challenge-platform/") ||
+    lower.includes("cf-chl") ||
+    lower.includes("cf_chl_opt") ||
+    lower.includes("captcha-delivery.com") ||
+    lower.includes("px-captcha") ||
+    lower.includes("_incapsula_resource") ||
+    lower.includes("request unsuccessful. incapsula");
+
+  return hasStrongMarker;
+}
+
+/**
+ * Look up an open-access copy via OpenAlex and (optionally) Unpaywall.
+ * Never bypasses paywalls; queries legitimate open-access registries.
+ */
+export async function lookupOpenAccessCopy(params: {
+  doi?: string;
+  url?: string;
+  title?: string;
+}): Promise<{ oaUrl: string; provider: "openalex" | "unpaywall"; title?: string } | undefined> {
+  const doi = params.doi || extractDoi(params.url);
+
+  // 1. OpenAlex lookup (best_oa_location / open_access.oa_url)
+  const openAlexBase = process.env.POLARIS_OPENALEX_URL || "https://api.openalex.org";
+  if (doi) {
+    try {
+      const openAlexUrl = `${openAlexBase.replace(/\/+$/, "")}/works/https://doi.org/${doi}`;
+      await assertSafeUrl(openAlexUrl);
+      const res = await fetchWithRetry(openAlexUrl, {}, 15000);
+      if (res.ok) {
+        const json = (await res.json()) as {
+          title?: string;
+          best_oa_location?: { pdf_url?: string; landing_page_url?: string };
+          open_access?: { is_oa?: boolean; oa_url?: string };
+        };
+        const oaUrl =
+          json.best_oa_location?.pdf_url ||
+          json.best_oa_location?.landing_page_url ||
+          json.open_access?.oa_url;
+        if (oaUrl) {
+          return { oaUrl, provider: "openalex", title: json.title };
+        }
+      }
+    } catch {
+      // ignore OpenAlex error and fallback to Unpaywall
+    }
+  }
+
+  // 2. Unpaywall lookup (if UNPAYWALL_EMAIL is set and DOI exists)
+  const unpaywallEmail = process.env.UNPAYWALL_EMAIL;
+  if (doi && unpaywallEmail) {
+    try {
+      const unpaywallBase = process.env.POLARIS_UNPAYWALL_URL || "https://api.unpaywall.org";
+      const unpaywallUrl = `${unpaywallBase.replace(/\/+$/, "")}/v2/${encodeURIComponent(doi)}?email=${encodeURIComponent(unpaywallEmail)}`;
+      await assertSafeUrl(unpaywallUrl);
+      const res = await fetchWithRetry(unpaywallUrl, {}, 15000);
+      if (res.ok) {
+        const json = (await res.json()) as {
+          title?: string;
+          best_oa_location?: { url_for_pdf?: string; url?: string };
+          oa_locations?: Array<{ url_for_pdf?: string; url?: string }>;
+        };
+        const oaUrl =
+          json.best_oa_location?.url_for_pdf ||
+          json.best_oa_location?.url ||
+          json.oa_locations?.[0]?.url_for_pdf ||
+          json.oa_locations?.[0]?.url;
+        if (oaUrl) {
+          return { oaUrl, provider: "unpaywall", title: json.title };
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return undefined;
 }
 
 export function applyCaptureCap(text: string): string {
@@ -262,6 +378,98 @@ export async function extractPdfText(pdfBuffer: Buffer): Promise<string> {
   }
 }
 
+/**
+ * Shared helper to fetch and capture an open-access copy (PDF or HTML).
+ * Enforces robots.txt, safe URL / SSRF guard, formats standard markdown,
+ * and records both publisher URL and open-access URL.
+ */
+export async function captureOpenAccessCopy(params: {
+  sourceId: string;
+  originalUrl?: string;
+  oaUrl: string;
+  provider?: string;
+  fallbackReason?: string;
+  preferredTitle?: string;
+  capturesDir: string;
+  accessed: string;
+  kind?: string;
+}): Promise<CapturedContent> {
+  // 1. Robots.txt check on OA URL
+  const allowed = await isUrlAllowedByRobots(params.oaUrl);
+  if (!allowed) {
+    throw new Error(`Open-access fetch blocked by robots.txt rules for ${params.oaUrl}`);
+  }
+
+  // 2. SSRF guard on OA URL
+  await assertSafeUrl(params.oaUrl);
+
+  // 3. Fetch OA URL
+  const oaRes = await fetchWithRetry(params.oaUrl, {}, 25000);
+  if (!oaRes.ok) {
+    throw new Error(`Open-access copy at ${params.oaUrl} failed with HTTP ${oaRes.status} ${oaRes.statusText}`);
+  }
+
+  // 4. Content negotiation: PDF vs HTML
+  const contentType = (oaRes.headers.get("content-type") || "").toLowerCase();
+  const isHtml = contentType.includes("text/html") || contentType.includes("application/xhtml+xml");
+  const isPdf = !isHtml && (params.oaUrl.toLowerCase().endsWith(".pdf") || contentType.includes("application/pdf"));
+
+  let extractedTitle = params.preferredTitle;
+  let extractedText = "";
+
+  if (isPdf) {
+    const arrBuf = await oaRes.arrayBuffer();
+    extractedText = await extractPdfText(Buffer.from(arrBuf));
+    if (!extractedTitle) {
+      extractedTitle = params.oaUrl.split("/").pop()?.replace(/\.pdf$/i, "") || "Open Access Paper";
+    }
+  } else {
+    const oaHtml = await oaRes.text();
+    const parsed = extractHtmlText(oaHtml);
+    extractedText = parsed.text;
+    if (!extractedTitle) {
+      extractedTitle = parsed.title;
+    }
+  }
+
+  const finalTitle = params.preferredTitle || extractedTitle || params.originalUrl || params.oaUrl;
+  const capped = applyCaptureCap(extractedText);
+  const capRel = `captures/${params.sourceId}.md`;
+  const capAbs = resolve(params.capturesDir, `${params.sourceId}.md`);
+
+  const viaPart = params.provider && params.provider !== "source" ? ` via ${params.provider}` : "";
+  const reasonPart = params.fallbackReason ? ` after publisher returned ${params.fallbackReason}` : "";
+  const note = `Captured from open-access copy (${params.oaUrl})${viaPart}${reasonPart}. Never bypasses paywalls.`;
+
+  const md = [
+    `# ${finalTitle}`,
+    `- Source ID: ${params.sourceId}`,
+    `- Kind: ${params.kind || "paper"}`,
+    `- URL: ${params.originalUrl || params.oaUrl}`,
+    `- Open Access URL: ${params.oaUrl}`,
+    `- Accessed: ${params.accessed}`,
+    `- Note: ${note}`,
+    `- Extracted by: Polaris MCP (${isPdf ? "pdftotext" : "html"})`,
+    `---`,
+    ``,
+    capped,
+  ].join("\n");
+
+  await atomicWriteFile(capAbs, md);
+
+  return {
+    id: params.sourceId,
+    kind: (params.kind as any) || "paper",
+    title: finalTitle,
+    url: params.originalUrl || params.oaUrl,
+    oaUrl: params.oaUrl,
+    note,
+    text: capped,
+    preview: capped.slice(0, 240) + (capped.length > 240 ? "..." : ""),
+    captureRelPath: capRel,
+  };
+}
+
 /* ───────── YouTube Subtitles / Transcript Extraction ───────── */
 
 export function parseVttToTranscript(vttContent: string): string {
@@ -449,6 +657,8 @@ export async function captureSource(
   input: {
     kind?: string;
     url?: string;
+    oaUrl?: string;
+    doi?: string;
     path?: string;
     title?: string;
   },
@@ -457,10 +667,14 @@ export async function captureSource(
 ): Promise<CapturedContent> {
   const accessed = todayIso();
   const rawUrl = input.url?.trim();
+  const rawOaUrl = input.oaUrl?.trim();
   const rawPath = input.path?.trim();
 
   if (rawUrl) {
     await assertSafeUrl(rawUrl);
+  }
+  if (rawOaUrl) {
+    await assertSafeUrl(rawOaUrl);
   }
   if (rawPath && (rawPath.startsWith("file:") || rawPath.startsWith("http:") || rawPath.startsWith("https:"))) {
     await assertSafeUrl(rawPath);
@@ -570,15 +784,86 @@ export async function captureSource(
 
   // 3. Open-Access PDF direct URL
   if (rawUrl && rawUrl.toLowerCase().endsWith(".pdf")) {
+    if (rawOaUrl) {
+      return await captureOpenAccessCopy({
+        sourceId,
+        originalUrl: rawUrl,
+        oaUrl: rawOaUrl,
+        preferredTitle: input.title,
+        capturesDir,
+        accessed,
+        kind: input.kind || "paper",
+      });
+    }
+
+    const allowed = await isUrlAllowedByRobots(rawUrl);
+    if (!allowed) {
+      throw new Error(`PDF fetch blocked by robots.txt rules for ${rawUrl}`);
+    }
+
     const capRel = `captures/${sourceId}.md`;
     const capAbs = resolve(capturesDir, `${sourceId}.md`);
     let extractedText = "";
 
     try {
-      const res = await fetchWithRetry(rawUrl, {}, 25000);
+      const doi = extractDoi(rawUrl) || input.doi;
+      let res: Response;
+      try {
+        res = await fetchWithRetry(rawUrl, {}, 25000);
+      } catch (err) {
+        if (doi) {
+          res = new Response(null, { status: 403, statusText: (err as Error).message });
+        } else {
+          throw err;
+        }
+      }
+
       if (res.ok) {
-        const arrBuf = await res.arrayBuffer();
-        extractedText = await extractPdfText(Buffer.from(arrBuf));
+        const contentType = (res.headers.get("content-type") || "").toLowerCase();
+        if (contentType.includes("text/html")) {
+          const html = await res.text();
+          if (isBotWallOrCaptcha(res.status, html)) {
+            const oaMatch = await lookupOpenAccessCopy({ doi, url: rawUrl, title: input.title });
+            if (oaMatch) {
+              return await captureOpenAccessCopy({
+                sourceId,
+                originalUrl: rawUrl,
+                oaUrl: oaMatch.oaUrl,
+                provider: oaMatch.provider,
+                fallbackReason: "HTML bot wall / captcha challenge",
+                preferredTitle: input.title || oaMatch.title,
+                capturesDir,
+                accessed,
+                kind: input.kind || "paper",
+              });
+            }
+            extractedText = "[PDF capture failed: the URL answered a bot wall / captcha page and no open-access copy was found]";
+          } else {
+            // The ".pdf" URL answered an HTML page (e.g. a landing page): keep its text instead of running pdftotext.
+            extractedText = extractHtmlText(html).text;
+          }
+        } else {
+          const arrBuf = await res.arrayBuffer();
+          extractedText = await extractPdfText(Buffer.from(arrBuf));
+        }
+      } else if (res.status === 401 || res.status === 403 || res.status === 429) {
+        const oaMatch = await lookupOpenAccessCopy({ doi, url: rawUrl, title: input.title });
+        if (oaMatch) {
+          return await captureOpenAccessCopy({
+            sourceId,
+            originalUrl: rawUrl,
+            oaUrl: oaMatch.oaUrl,
+            provider: oaMatch.provider,
+            fallbackReason: `HTTP ${res.status} ${res.statusText}`,
+            preferredTitle: input.title || oaMatch.title,
+            capturesDir,
+            accessed,
+            kind: input.kind || "paper",
+          });
+        }
+        extractedText = `[PDF capture failed: HTTP ${res.status} ${res.statusText}]`;
+      } else {
+        extractedText = `[PDF capture failed: HTTP ${res.status} ${res.statusText}]`;
       }
     } catch (err) {
       extractedText = `[PDF capture failed: ${(err as Error).message}]`;
@@ -642,19 +927,82 @@ export async function captureSource(
     };
   }
 
-  // 5. General Web Page (HTML)
+  // 5. General Web Page (HTML) / Publisher Article
   if (rawUrl && (rawUrl.startsWith("http://") || rawUrl.startsWith("https://"))) {
+    if (rawOaUrl) {
+      return await captureOpenAccessCopy({
+        sourceId,
+        originalUrl: rawUrl,
+        oaUrl: rawOaUrl,
+        preferredTitle: input.title,
+        capturesDir,
+        accessed,
+        kind: input.kind || "paper",
+      });
+    }
+
     const allowed = await isUrlAllowedByRobots(rawUrl);
     if (!allowed) {
       // Disallowed by robots.txt
       throw new Error(`Web page fetch blocked by robots.txt rules for ${rawUrl}`);
     }
 
-    const res = await fetchWithRetry(rawUrl, {}, 20000);
-    if (!res.ok) {
-      throw new Error(`Failed to fetch web page ${rawUrl}: HTTP ${res.status} ${res.statusText}`);
+    let res: Response;
+    try {
+      res = await fetchWithRetry(rawUrl, {}, 20000);
+    } catch (err) {
+      const doi = extractDoi(rawUrl) || input.doi;
+      if (doi) {
+        res = new Response(null, { status: 403, statusText: (err as Error).message });
+      } else {
+        throw err;
+      }
     }
-    const html = await res.text();
+
+    let html = "";
+    let needOaFallback = false;
+    let fallbackReason = "";
+
+    if (!res.ok) {
+      if (res.status === 401 || res.status === 403 || res.status === 429) {
+        needOaFallback = true;
+        fallbackReason = `HTTP ${res.status} ${res.statusText}`;
+      } else {
+        throw new Error(`Failed to fetch web page ${rawUrl}: HTTP ${res.status} ${res.statusText}`);
+      }
+    } else {
+      html = await res.text();
+      if (isBotWallOrCaptcha(res.status, html)) {
+        needOaFallback = true;
+        fallbackReason = "HTML bot wall / captcha challenge";
+      }
+    }
+
+    if (needOaFallback) {
+      const doi = extractDoi(rawUrl) || extractDoi(html) || input.doi;
+      const oaResult = (doi || rawUrl)
+        ? await lookupOpenAccessCopy({ doi, url: rawUrl, title: input.title })
+        : undefined;
+
+      if (!oaResult) {
+        throw new Error(
+          `Failed to fetch web page ${rawUrl}: publisher returned ${fallbackReason} and no open-access alternative was found via OpenAlex/Unpaywall`,
+        );
+      }
+
+      return await captureOpenAccessCopy({
+        sourceId,
+        originalUrl: rawUrl,
+        oaUrl: oaResult.oaUrl,
+        provider: oaResult.provider,
+        fallbackReason,
+        preferredTitle: input.title || oaResult.title,
+        capturesDir,
+        accessed,
+        kind: input.kind || "paper",
+      });
+    }
+
     const { title: extractedTitle, text: extractedText } = extractHtmlText(html);
     const finalTitle = input.title || extractedTitle || rawUrl;
     const capped = applyCaptureCap(extractedText);
@@ -682,6 +1030,19 @@ export async function captureSource(
       preview: capped.slice(0, 240) + (capped.length > 240 ? "..." : ""),
       captureRelPath: capRel,
     };
+  }
+
+  // Standalone open-access URL when rawUrl is omitted
+  if (!rawUrl && rawOaUrl && (rawOaUrl.startsWith("http://") || rawOaUrl.startsWith("https://"))) {
+    return await captureOpenAccessCopy({
+      sourceId,
+      originalUrl: rawOaUrl,
+      oaUrl: rawOaUrl,
+      preferredTitle: input.title,
+      capturesDir,
+      accessed,
+      kind: input.kind || "paper",
+    });
   }
 
   // 6. Local file
@@ -741,6 +1102,8 @@ export async function captureSources(
         {
           kind: typeof s.kind === "string" ? s.kind : undefined,
           url: typeof s.url === "string" ? s.url : undefined,
+          oaUrl: typeof s.oaUrl === "string" ? s.oaUrl : undefined,
+          doi: typeof s.doi === "string" ? s.doi : undefined,
           path: typeof s.path === "string" ? s.path : undefined,
           title: typeof s.title === "string" ? s.title : undefined,
         },
@@ -750,6 +1113,12 @@ export async function captureSources(
 
       if (res.captureRelPath) {
         s.capture = res.captureRelPath;
+      }
+      if (res.oaUrl) {
+        s.oaUrl = res.oaUrl;
+      }
+      if (res.note) {
+        s.notes = s.notes ? `${s.notes} | ${res.note}` : res.note;
       }
       if (res.title && (!s.title || s.title === "Web Page" || s.title === "Local File")) {
         s.title = res.title;

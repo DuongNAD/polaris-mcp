@@ -35,6 +35,19 @@ The Polaris workflow follows 4 distinct stages:
    - Validate through automated quality gates.
    - Render the complete, gold-standard `ROADMAP.md` in Vietnamese with Mermaid dependency diagrams and generated references.
 
+## brief
+
+The course brief (`polaris/brief.json`) defines high-level learning goals, scope, and operational boundaries:
+- `subject`: Name of the course / topic.
+- `slug`: URL-friendly identifier for directory naming.
+- `goal`: Clear, outcome-focused statement of what the learner will be able to do.
+- `outcomes`: Array of measurable objectives with concrete verification conditions (`check`).
+- `start`: ISO start date (`YYYY-MM-DD`).
+- `deadline`: Optional completion target date.
+- `hoursPerWeek`: Realistic weekly study budget (e.g. 2, 3, or 5 hours).
+- `sourcesOfTruth`: Primary references (local files, course textbooks, or official URLs).
+- `roadmapPath`: Optional relative path to render `ROADMAP.md` (e.g. `"polaris/ROADMAP.polaris.md"`). **Use this to render the roadmap elsewhere so a learner's own ROADMAP.md is never overwritten.**
+
 ## gates
 
 Quality gates run during `polaris_check` and `polaris_roadmap_save`:
@@ -47,8 +60,15 @@ Quality gates run during `polaris_check` and `polaris_roadmap_save`:
   - Every source must have a label (`course`, `extension`, `unverified`) and a quality score (1-5) with `why`.
 - **Facts:**
   - Every fact must point to an existing source in `sources.json`.
-  - Every fact must have a non-empty locator.
-  - Numbers and dates must either have `crossCheck` sources or carry the `unverified` label.
+  - Every fact must have a non-empty locator (`lines`, `[p. N]`, `Sec. X`, `[mm:ss]`).
+  - **Empirical quantities rule:** Claims containing real quantities (percentages like `92%`, measurements, counts with units, dates/years like `2023`, and statistics like `"22.22x"` or `"50 TOPS"`) must either have `crossCheck` sources or carry the `unverified` label.
+  - **Exemptions (no crossCheck required):** The gate ignores mathematical notation and conventional names:
+    - Exponents and indices: `R^2`, `x^2`, `O(d^3)`, `O(n log n)`, `w_1`, `L1/L2`, `l1/l2`.
+    - Dimensions: `1D`, `2D`, `3D`, `n×d`, `(n, 1)`.
+    - Ordinal and structural words: `bước 1`, `slide 3`, `M1/M2.1`, `F12/S3` IDs, page numbers inside locators (`[p. 4]`, `lines 12-25`).
+    - LaTeX math expressions inside `$...$` or `$$...$$` (e.g. `$x^2$`, `$\|Xw - y\|^2$`).
+    - Numbers inside inline code (e.g. `` `n_iter=100` ``, `` `lr=0.001` ``).
+    - Mathematical relations with 0 or 1 (`= 0`, `= 1`, `> 0`).
 - **Roadmap:**
   - Every brief outcome must be covered by at least one module output.
   - Every module must have:
@@ -85,6 +105,17 @@ Quality gates run during `polaris_check` and `polaris_roadmap_save`:
 - **Private & Local Address Blocking:** Every host is resolved via DNS (`node:dns`) with all addresses checked. Polaris refuses loopback (`127.0.0.0/8`, `::1`), unspecified (`0.0.0.0`, `::`), private LANs (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`), link-local / cloud metadata (`169.254.0.0/16`, `fe80::/10`), CGNAT (`100.64.0.0/10`), multicast (`224.0.0.0/4`, `ff00::/8`), reserved ranges, IPv4-mapped IPv6 forms of those, and hostnames `localhost` / `*.localhost`.
 - **Manual Redirect Protection:** Redirects are followed manually (max 5 hops) and every hop is strictly re-validated through the guard to prevent SSRF via redirect.
 - **Opt-In for Local Testing:** `POLARIS_ALLOW_PRIVATE_URLS=1` disables the private address restriction for deliberate local testing while preserving the `http`/`https` scheme requirement.
+
+**Open-Access Fallback & Known OA Copies (v0.3.5):**
+- When a source or research item already has an `oaUrl`, Polaris captures the open-access copy directly, preserving the original publisher link in `url` and recording both with an explanatory note.
+- When no `oaUrl` is known and a publisher URL returns HTTP 401 Unauthorized, 403 Forbidden, 429 Too Many Requests, or an interstitial bot wall (< 1500 chars with strong challenge markers), Polaris queries OpenAlex (`best_oa_location` / `open_access.oa_url`) and Unpaywall for legitimate open-access copies.
+- Evaluates `robots.txt` for both publisher and open-access URLs, skipping with a clear error if disallowed.
+- Uses a unified open-access capture engine for both PDF and HTML content.
+- **Ethics & Security:** Never bypasses paywalls; preserves outbound SSRF security guard on every hop.
+
+## capture
+
+Polaris captures full-text local copies (`captures/<id>.md`, git-ignored for personal study) from local files, general web pages, arXiv preprints, YouTube transcripts, and open-access research papers. When a source or research item already has an open-access URL (`oaUrl`), Polaris captures the open-access copy first to ensure complete full text is retained, while keeping the original publisher link in `url` and recording both along with an explanatory note. If no `oaUrl` is known and a publisher blocks with HTTP 401/403/429, a network failure with a known DOI, or a bot wall interstitial (< 1500 chars of readable text with strong challenge markers), Polaris queries OpenAlex and Unpaywall for legitimate open-access alternatives. Both publisher and open-access URLs strictly respect robots.txt (skipping with a clear error if disallowed) and enforce the outbound SSRF guard on every hop. Polaris never bypasses paywalls.
 
 ## roadmap
 
