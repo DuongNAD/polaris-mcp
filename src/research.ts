@@ -358,7 +358,8 @@ export function parseGitHubResponse(json: Record<string, unknown>): ResearchItem
 
 export async function fetchOpenAlex(query: string, limit = 5): Promise<ResearchItem[]> {
   await rateLimitedDelay("openalex", 1000);
-  const url = `https://api.openalex.org/works?search=${encodeURIComponent(query)}&per-page=${limit}`;
+  const openAlexBase = (process.env.POLARIS_OPENALEX_URL || "https://api.openalex.org").replace(/\/+$/, "");
+  const url = `${openAlexBase}/works?search=${encodeURIComponent(query)}&per-page=${limit}`;
   const res = await fetchWithRetry(url, {}, 20000);
   if (!res.ok) {
     throw new Error(`OpenAlex returned HTTP ${res.status}: ${res.statusText}`);
@@ -378,10 +379,28 @@ export async function fetchArxiv(query: string, limit = 5): Promise<ResearchItem
   return parseArxivXml(xml);
 }
 
+export function getSemanticScholarMinInterval(): number {
+  const envVal = process.env.POLARIS_S2_MIN_INTERVAL_MS;
+  if (envVal !== undefined && envVal.trim() !== "") {
+    const parsed = parseInt(envVal.trim(), 10);
+    if (!Number.isNaN(parsed)) {
+      return Math.max(1000, parsed);
+    }
+  }
+  return 1100;
+}
+
 export async function fetchSemanticScholar(query: string, limit = 5): Promise<ResearchItem[]> {
-  await rateLimitedDelay("semanticscholar", 1000);
-  const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(query)}&limit=${limit}&fields=title,authors,year,venue,citationCount,openAccessPdf,tldr,externalIds,abstract`;
-  const res = await fetchWithRetry(url, {}, 20000);
+  const apiKey = (process.env.SEMANTIC_SCHOLAR_API_KEY || process.env.S2_API_KEY || "").trim() || undefined;
+  const interval = getSemanticScholarMinInterval();
+  await rateLimitedDelay("semanticscholar", interval);
+  const s2Base = (process.env.POLARIS_S2_URL || "https://api.semanticscholar.org").replace(/\/+$/, "");
+  const url = `${s2Base}/graph/v1/paper/search?query=${encodeURIComponent(query)}&limit=${limit}&fields=title,authors,year,venue,citationCount,openAccessPdf,tldr,externalIds,abstract`;
+  const headers: Record<string, string> = {};
+  if (apiKey) {
+    headers["x-api-key"] = apiKey;
+  }
+  const res = await fetchWithRetry(url, { headers }, 20000);
   if (!res.ok) {
     throw new Error(`Semantic Scholar returned HTTP ${res.status}: ${res.statusText}`);
   }

@@ -61,7 +61,7 @@ Sister project to [Aurora Slides MCP](https://github.com/DuongNAD/aurora-slides-
 
 > **Note on API Cache:** Regenerable search API responses (24h TTL) are stored in the global cache directory (`%LOCALAPPDATA%/polaris/cache` or `POLARIS_CACHE_DIR`), saving space on exFAT drives.
 
-## Tools (v0.3.5)
+## Tools (v0.3.6)
 
 Polaris exposes 20 specialized MCP tools across 5 major functional domains:
 
@@ -188,7 +188,7 @@ Polaris includes an autonomous discovery and research engine designed for academ
 ### Keyless Providers
 - **`openalex`**: Works, publication years, citations, inverted-index reconstructed abstracts, and open-access PDF URLs.
 - **`arxiv`**: Atom XML API with 1 call / 3s rate limit; metadata and full-text PDF download.
-- **`semanticscholar`**: Paper metadata, TL;DR summaries, citation counts, and OA links with exponential backoff on HTTP 429/503.
+- **`semanticscholar`**: Paper metadata, TL;DR summaries, citation counts, and OA links with exponential backoff on HTTP 429/503. Conservative rate-limiting of at least 1100 ms between requests (configurable via `POLARIS_S2_MIN_INTERVAL_MS`, minimum 1000 ms). Supports optional `SEMANTIC_SCHOLAR_API_KEY` (alias `S2_API_KEY`) placed in the polaris server's `"env"` block of your MCP configuration (request a key at https://www.semanticscholar.org/product/api; never commit keys into git repositories). Keyless access remains the default. Base URL can be overridden via `POLARIS_S2_URL`.
 - **`crossref`**: DOIs, journals, books, and citation references.
 - **`wikipedia`**: Vietnamese (`vi`) and English (`en`) summaries and plain-text extracts.
 - **`github`**: Official repositories and code implementations (10 req/min unauthenticated rate limit).
@@ -349,6 +349,7 @@ Polaris integrates seamlessly with [SmartDrive-OS](https://github.com/DuongNAD/s
 
 | Version | Description |
 |---|---|
+| **0.3.6** | Optional Semantic Scholar API key support (`SEMANTIC_SCHOLAR_API_KEY`, alias `S2_API_KEY`) configured in the polaris server's `"env"` block of MCP configs (request key at https://www.semanticscholar.org/product/api; never committed in repos; keyless remains default); conservative >= 1100 ms rate-limiting with `POLARIS_S2_MIN_INTERVAL_MS` override (min 1000 ms); credential header stripping (`authorization`, `proxy-authorization`, `x-api-key`, `cookie`) case-insensitively across Headers objects, arrays, and plain objects on cross-origin redirects in `fetchSafeHop`; zero credential leakage in errors, logs, cache keys, captures, or tool output; `POLARIS_S2_URL` test base URL override. |
 | **0.3.5** | Polaris dogfood fixes: Intelligent facts gate false-positive exemptions for mathematical notation (exponents/indices `R^2`, `x^2`, `O(d^3)`, `O(n log n)`, `w_1`, `L1/L2`, `l1/l2`), dimensions (`1D/2D/3D`, `n×d`), structural markers (`bước 1`, `slide 3`, `M1/M2.1`, `F12/S3` IDs, locators), LaTeX inside `$...$`, and inline code, while strictly flagging empirical quantities (percentages, measurements, dates, statistics); prefers known open-access copies (`oaUrl`) first while keeping original publisher link; interstitial bot-wall detection (< 1500 chars with strong challenge markers) preventing false positives on normal articles; unified HTML/PDF open-access capture engine; robots.txt validation on open-access URLs; automatic Open-Access fallback via OpenAlex and Unpaywall when publisher URLs return 401/403/429/bot-wall (recording both original and `oaUrl` with notes and keeping SSRF guard on every hop); documented brief `roadmapPath` ("render the roadmap elsewhere so a learner's own ROADMAP.md is never overwritten"). |
 | **0.3.4** | SSRF Security Guard: Block Server-Side Request Forgery in source capture and research fetches. Outbound requests strictly allow http/https only, resolve hosts via DNS (`node:dns`), refuse loopback (127/8, ::1), unspecified (0.0.0.0, ::), private LANs (10/8, 172.16/12, 192.168/16, fc00::/7), link-local/cloud metadata (169.254/16, fe80::/10), CGNAT (100.64/10), multicast, reserved ranges, IPv4-mapped IPv6, and localhost/*.localhost. Follow redirects manually (max 5 hops) with re-validation on every hop. Opt-in `POLARIS_ALLOW_PRIVATE_URLS=1` for deliberate local testing. |
 | **0.3.3** | Vega MCP integration: Read-only load of due Vega FSRS cards (`<hub>/.vega/cards.json`) in `polaris_today` with 10-minute session recipe budget; silent handling of "card" progress events in `polaris_progress_sync`. |

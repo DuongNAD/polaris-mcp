@@ -338,7 +338,44 @@ const oaHtml = `<!DOCTYPE html>
 </body>
 </html>`;
 
+let lastS2ReqHeaders = {};
+let redirectHop2Headers = {};
+
+const redirectTargetServer = createServer((req, res) => {
+  redirectHop2Headers = req.headers;
+  res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify({ ok: true, redirected: true }));
+});
+await new Promise((res) => redirectTargetServer.listen(0, "127.0.0.1", res));
+const redirectTargetPort = redirectTargetServer.address().port;
+
 const httpServer = createServer((req, res) => {
+  if (req.url === "/redirect_cross_origin_credentials") {
+    res.writeHead(302, { Location: `http://127.0.0.1:${redirectTargetPort}/redirect_target` });
+    res.end();
+    return;
+  }
+  if (req.url?.startsWith("/graph/v1/paper/search")) {
+    lastS2ReqHeaders = req.headers;
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(
+      JSON.stringify({
+        total: 1,
+        data: [
+          {
+            paperId: "s2_fixture_paper_1",
+            title: "Semantic Scholar Fixture Paper",
+            authors: [{ name: "Test Author" }],
+            year: 2024,
+            citationCount: 42,
+            externalIds: { DOI: "10.1234/s2_test" },
+            tldr: { text: "A test paper for Semantic Scholar API key." },
+          },
+        ],
+      }),
+    );
+    return;
+  }
   if (req.url === "/robots.txt") {
     res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
     res.end("User-agent: *\nDisallow: /oa_disallowed/\n");
@@ -639,6 +676,188 @@ ok(
 delete process.env.POLARIS_OPENALEX_URL;
 delete process.env.POLARIS_ALLOW_PRIVATE_URLS;
 
+/* ───────── 2.2 Semantic Scholar API Key, Interval & Credential Dropping ───────── */
+console.log("\n--- Semantic Scholar API Key, Interval & Safe Hop Credential Stripping ---");
+
+// 2.2a stripCredentialHeaders unit checks (Headers instance, array, object; case-insensitivity)
+const hHeaders = new Headers({
+  "Authorization": "Bearer auth-secret",
+  "Proxy-Authorization": "Basic proxy-secret",
+  "X-Api-Key": "s2-key-secret",
+  "Cookie": "sess=secret-cookie",
+  "X-Safe-Header": "safe-preserved",
+});
+const strippedH = polarisLib.stripCredentialHeaders(hHeaders);
+ok(
+  "stripCredentialHeaders drops credential headers on Headers instance (case-insensitive)",
+  !strippedH.has("authorization") &&
+    !strippedH.has("proxy-authorization") &&
+    !strippedH.has("x-api-key") &&
+    !strippedH.has("cookie") &&
+    strippedH.get("x-safe-header") === "safe-preserved",
+);
+
+const hArray = [
+  ["Authorization", "Bearer arr-secret"],
+  ["proxy-authorization", "Basic arr-proxy"],
+  ["X-API-KEY", "arr-s2-key"],
+  ["cookie", "arr-cookie"],
+  ["X-Custom", "safe-array"],
+];
+const strippedArr = polarisLib.stripCredentialHeaders(hArray);
+ok(
+  "stripCredentialHeaders drops credential headers on array of tuples",
+  strippedArr.length === 1 && strippedArr[0][0] === "X-Custom" && strippedArr[0][1] === "safe-array",
+);
+
+const hObj = {
+  "AUTHORIZATION": "Bearer obj-secret",
+  "Proxy-Authorization": "Basic obj-proxy",
+  "x-api-key": "obj-s2-key",
+  "Cookie": "obj-cookie",
+  "Accept": "application/json",
+};
+const strippedObj = polarisLib.stripCredentialHeaders(hObj);
+ok(
+  "stripCredentialHeaders drops credential headers on plain object",
+  Object.keys(strippedObj).length === 1 && strippedObj["Accept"] === "application/json",
+);
+
+// 2.2b 302 cross-origin redirect credential dropping integration check
+process.env.POLARIS_ALLOW_PRIVATE_URLS = "1";
+redirectHop2Headers = {};
+const redirectRes = await polarisLib.fetchWithTimeout(
+  `http://127.0.0.1:${httpPort}/redirect_cross_origin_credentials`,
+  {
+    headers: {
+      "Authorization": "Bearer cross-origin-auth",
+      "Proxy-Authorization": "Basic cross-origin-proxy",
+      "X-Api-Key": "cross-origin-s2-key",
+      "Cookie": "session=cross-origin-cookie",
+      "X-Retained-Header": "retained-value",
+    },
+  },
+);
+ok("cross-origin 302 redirect completes with 200", redirectRes.status === 200);
+ok(
+  "cross-origin redirect drops x-api-key on second hop",
+  redirectHop2Headers["x-api-key"] === undefined,
+  `x-api-key: ${redirectHop2Headers["x-api-key"]}`,
+);
+ok(
+  "cross-origin redirect drops authorization on second hop",
+  redirectHop2Headers["authorization"] === undefined,
+  `authorization: ${redirectHop2Headers["authorization"]}`,
+);
+ok(
+  "cross-origin redirect drops proxy-authorization on second hop",
+  redirectHop2Headers["proxy-authorization"] === undefined,
+  `proxy-authorization: ${redirectHop2Headers["proxy-authorization"]}`,
+);
+ok(
+  "cross-origin redirect drops cookie on second hop",
+  redirectHop2Headers["cookie"] === undefined,
+  `cookie: ${redirectHop2Headers["cookie"]}`,
+);
+ok(
+  "cross-origin redirect preserves safe headers on second hop",
+  redirectHop2Headers["x-retained-header"] === "retained-value",
+);
+
+// Cross-origin redirect with Headers instance
+redirectHop2Headers = {};
+await polarisLib.fetchWithTimeout(
+  `http://127.0.0.1:${httpPort}/redirect_cross_origin_credentials`,
+  {
+    headers: new Headers({
+      "Authorization": "Bearer headers-inst-auth",
+      "X-Api-Key": "headers-inst-s2-key",
+      "X-Preserved": "headers-inst-preserved",
+    }),
+  },
+);
+ok(
+  "cross-origin redirect with Headers instance drops credentials",
+  redirectHop2Headers["x-api-key"] === undefined &&
+    redirectHop2Headers["authorization"] === undefined &&
+    redirectHop2Headers["x-preserved"] === "headers-inst-preserved",
+);
+
+// Cross-origin redirect with array of tuples
+redirectHop2Headers = {};
+await polarisLib.fetchWithTimeout(
+  `http://127.0.0.1:${httpPort}/redirect_cross_origin_credentials`,
+  {
+    headers: [
+      ["Authorization", "Bearer arr-auth"],
+      ["X-Api-Key", "arr-s2-key"],
+      ["X-Arr-Preserved", "arr-preserved"],
+    ],
+  },
+);
+ok(
+  "cross-origin redirect with tuple array drops credentials",
+  redirectHop2Headers["x-api-key"] === undefined &&
+    redirectHop2Headers["authorization"] === undefined &&
+    redirectHop2Headers["x-arr-preserved"] === "arr-preserved",
+);
+
+// 2.2c Semantic Scholar API Key fixture checks (POLARIS_S2_URL)
+process.env.POLARIS_S2_URL = `http://127.0.0.1:${httpPort}`;
+
+// Case 1: SEMANTIC_SCHOLAR_API_KEY set -> fixture receives x-api-key
+process.env.SEMANTIC_SCHOLAR_API_KEY = "test-secret-s2-key-alpha-12345";
+delete process.env.S2_API_KEY;
+lastS2ReqHeaders = {};
+const s2ItemsKey1 = await polarisLib.fetchSemanticScholar("ReAct", 1);
+ok("fetchSemanticScholar succeeds with SEMANTIC_SCHOLAR_API_KEY", s2ItemsKey1.length === 1 && s2ItemsKey1[0].title === "Semantic Scholar Fixture Paper");
+ok(
+  "fixture receives x-api-key when SEMANTIC_SCHOLAR_API_KEY is set",
+  lastS2ReqHeaders["x-api-key"] === "test-secret-s2-key-alpha-12345",
+  `x-api-key header: ${lastS2ReqHeaders["x-api-key"]}`,
+);
+
+// Case 2: S2_API_KEY alias set -> fixture receives x-api-key
+delete process.env.SEMANTIC_SCHOLAR_API_KEY;
+process.env.S2_API_KEY = "test-alias-s2-key-beta-67890";
+lastS2ReqHeaders = {};
+const s2ItemsKey2 = await polarisLib.fetchSemanticScholar("ReAct", 1);
+ok("fetchSemanticScholar succeeds with S2_API_KEY alias", s2ItemsKey2.length === 1);
+ok(
+  "fixture receives x-api-key when S2_API_KEY alias is set",
+  lastS2ReqHeaders["x-api-key"] === "test-alias-s2-key-beta-67890",
+  `x-api-key header: ${lastS2ReqHeaders["x-api-key"]}`,
+);
+
+// Case 3: Without key (keyless default) -> fixture receives NO x-api-key header
+delete process.env.SEMANTIC_SCHOLAR_API_KEY;
+delete process.env.S2_API_KEY;
+lastS2ReqHeaders = {};
+const s2ItemsKeyless = await polarisLib.fetchSemanticScholar("ReAct", 1);
+ok("fetchSemanticScholar succeeds without key (keyless default)", s2ItemsKeyless.length === 1);
+ok(
+  "fixture receives NO x-api-key header when keyless",
+  lastS2ReqHeaders["x-api-key"] === undefined,
+  `x-api-key header: ${lastS2ReqHeaders["x-api-key"]}`,
+);
+
+// 2.2d S2 Min Interval checks
+delete process.env.POLARIS_S2_MIN_INTERVAL_MS;
+ok("default S2 min interval is 1100 ms", polarisLib.getSemanticScholarMinInterval() === 1100);
+
+process.env.POLARIS_S2_MIN_INTERVAL_MS = "2000";
+ok("POLARIS_S2_MIN_INTERVAL_MS raises interval to 2000", polarisLib.getSemanticScholarMinInterval() === 2000);
+
+process.env.POLARIS_S2_MIN_INTERVAL_MS = "1000";
+ok("POLARIS_S2_MIN_INTERVAL_MS allows 1000 ms", polarisLib.getSemanticScholarMinInterval() === 1000);
+
+process.env.POLARIS_S2_MIN_INTERVAL_MS = "200";
+ok("POLARIS_S2_MIN_INTERVAL_MS never drops below 1000 ms", polarisLib.getSemanticScholarMinInterval() === 1000);
+
+delete process.env.POLARIS_S2_MIN_INTERVAL_MS;
+delete process.env.POLARIS_S2_URL;
+delete process.env.POLARIS_ALLOW_PRIVATE_URLS;
+
 const localNotePath = join(TEST_DIR, "lecture_notes.md");
 writeFileSync(
   localNotePath,
@@ -705,6 +924,8 @@ const transport = new StdioClientTransport({
     POLARIS_CACHE_DIR: CACHE_DIR,
     POLARIS_SMARTDRIVE_CMD: `node "${SMARTDRIVE_SCRIPT}" "${SMARTDRIVE_LOG}"`,
     POLARIS_ALLOW_PRIVATE_URLS: "1",
+    POLARIS_S2_URL: `http://127.0.0.1:${httpPort}`,
+    SEMANTIC_SCHOLAR_API_KEY: "CANARY_SECRET_KEY_NOT_IN_OUTPUT_98765",
   },
 });
 
@@ -811,6 +1032,7 @@ try {
   // 3.4 polaris_find (discovery tool)
   r = await call("polaris_find", { query: "ReAct reasoning acting", limit: 5 });
   ok("polaris_find executes discovery", !r.isError && textOf(r).includes("research result(s)"), textOf(r).split("\n")[0]);
+  ok("key string never appears in polaris_find tool output", !textOf(r).includes("CANARY_SECRET_KEY_NOT_IN_OUTPUT_98765"));
 
   // 3.5 polaris_research (multi-query investigation with shortlist generation & auto_add)
   r = await call("polaris_research", {
@@ -822,6 +1044,7 @@ try {
     auto_add: 1,
   });
   ok("polaris_research completes investigation", !r.isError && textOf(r).includes("Shortlist saved"), textOf(r).split("\n")[0]);
+  ok("key string never appears in polaris_research tool output", !textOf(r).includes("CANARY_SECRET_KEY_NOT_IN_OUTPUT_98765"));
   const shortlistDir = join(SUBJECT_DIR, "polaris", "research");
   ok("research directory created", existsSync(shortlistDir));
 
@@ -835,6 +1058,10 @@ try {
       shortlistMd.includes("# Danh sách tài liệu nghiên cứu:") &&
         shortlistMd.includes("## 1. Bảng tổng hợp (Shortlist)") &&
         shortlistMd.includes("| Rank | Title | Kind | Year | Citations | Open Access | Score | Reasons | Link |"),
+    );
+    ok(
+      "key string never appears in shortlist file",
+      !shortlistMd.includes("CANARY_SECRET_KEY_NOT_IN_OUTPUT_98765"),
     );
   }
 
@@ -1614,7 +1841,7 @@ try {
   ok("CLI today", todayCli.includes("Kế hoạch phiên học") && todayCli.includes("## Today's Dynamic Goal"));
 
   const versionCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "version"], { encoding: "utf8" });
-  ok("CLI version 0.3.5", versionCli.trim() === "0.3.5");
+  ok("CLI version 0.3.6", versionCli.trim() === "0.3.6");
 
   const helpCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "help"], { encoding: "utf8" });
   ok("CLI help", helpCli.includes("Usage: node polaris.mjs") && helpCli.includes("progress <subject_dir>") && helpCli.includes("today <subject_dir>"));
@@ -1762,6 +1989,7 @@ try {
 } finally {
   await client.close();
   httpServer.close();
+  redirectTargetServer.close();
 
   if (process.env.POLARIS_E2E_KEEP === "1") {
     console.log(`\n[POLARIS_E2E_KEEP=1] Test directory preserved at: ${TEST_DIR}`);

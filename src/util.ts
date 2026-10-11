@@ -7,9 +7,9 @@ import { homedir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const VERSION = "0.3.5";
+export const VERSION = "0.3.6";
 export const PKG_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-export const UA = `Polaris/0.3.5 (personal study course builder; https://github.com/DuongNAD) Node.js/${process.versions.node}`;
+export const UA = `Polaris/0.3.6 (personal study course builder; https://github.com/DuongNAD) Node.js/${process.versions.node}`;
 
 export function hubDir(): string {
   return resolve(process.env.POLARIS_HUB ?? "D:/02_Learning_Knowledge");
@@ -392,6 +392,66 @@ export type SafeFetchInit = RequestInit & {
   allowFirstHop?: boolean;
 };
 
+export type FetchHeaders = NonNullable<RequestInit["headers"]>;
+
+const CREDENTIAL_HEADERS = new Set([
+  "authorization",
+  "proxy-authorization",
+  "x-api-key",
+  "cookie",
+]);
+
+export function stripCredentialHeaders(headers: FetchHeaders): FetchHeaders {
+  if (typeof Headers !== "undefined" && headers instanceof Headers) {
+    const nextHeaders = new Headers(headers);
+    for (const h of CREDENTIAL_HEADERS) {
+      nextHeaders.delete(h);
+    }
+    return nextHeaders;
+  }
+  if (Array.isArray(headers)) {
+    return headers.filter(([k]) => typeof k === "string" && !CREDENTIAL_HEADERS.has(k.toLowerCase().trim()));
+  }
+  if (typeof headers === "object" && headers !== null) {
+    const clean: Record<string, string> = {};
+    for (const [k, v] of Object.entries(headers)) {
+      if (typeof k === "string" && !CREDENTIAL_HEADERS.has(k.toLowerCase().trim())) {
+        clean[k] = v as string;
+      }
+    }
+    return clean;
+  }
+  return headers;
+}
+
+export function mergeHeadersWithUserAgent(headers?: RequestInit["headers"]): RequestInit["headers"] {
+  if (!headers) {
+    return { "User-Agent": UA };
+  }
+  if (typeof Headers !== "undefined" && headers instanceof Headers) {
+    const h = new Headers(headers);
+    if (!h.has("user-agent")) {
+      h.set("User-Agent", UA);
+    }
+    return h;
+  }
+  if (Array.isArray(headers)) {
+    const hasUa = headers.some(([k]) => typeof k === "string" && k.toLowerCase() === "user-agent");
+    if (!hasUa) {
+      return [["User-Agent", UA], ...headers];
+    }
+    return headers;
+  }
+  if (typeof headers === "object" && headers !== null) {
+    const hasUa = Object.keys(headers).some((k) => k.toLowerCase() === "user-agent");
+    return {
+      ...(hasUa ? {} : { "User-Agent": UA }),
+      ...headers,
+    };
+  }
+  return headers;
+}
+
 export async function fetchSafeHop(
   currentUrl: string,
   init: SafeFetchInit,
@@ -411,14 +471,13 @@ export async function fetchSafeHop(
     await assertSafeUrl(currentUrl);
   }
 
+  const requestHeaders = mergeHeadersWithUserAgent(init.headers);
+
   const res = await fetch(currentUrl, {
     ...init,
     redirect: "manual",
     signal,
-    headers: {
-      "User-Agent": UA,
-      ...(init.headers ?? {}),
-    },
+    headers: requestHeaders,
   });
 
   if ([301, 302, 303, 307, 308].includes(res.status)) {
@@ -437,14 +496,7 @@ export async function fetchSafeHop(
       }
 
       if (nextUrlObj.origin !== currentUrlObj.origin && nextInit.headers) {
-        if (Array.isArray(nextInit.headers)) {
-          nextInit.headers = nextInit.headers.filter(([k]) => typeof k === "string" && k.toLowerCase() !== "authorization");
-        } else if (typeof nextInit.headers === "object") {
-          const h = { ...nextInit.headers } as Record<string, string>;
-          delete h["authorization"];
-          delete h["Authorization"];
-          nextInit.headers = h;
-        }
+        nextInit.headers = stripCredentialHeaders(nextInit.headers as FetchHeaders);
       }
 
       return fetchSafeHop(nextUrl, nextInit, signal, hopCount + 1);

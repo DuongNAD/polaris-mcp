@@ -148,7 +148,7 @@ Polaris v0.2a includes an autonomous research and discovery engine with keyless 
 **Keyless Providers:**
 - **`openalex`:** Query `api.openalex.org/works`. Extracts metadata, publication year, citations, reconstructed abstracts from inverted indices, and open-access PDF locations.
 - **`arxiv`:** Query `export.arxiv.org/api/query` (Atom XML API; rate limited to 1 call every 3 seconds). Extracts preprints and downloads open-access PDFs.
-- **`semanticscholar`:** Query `api.semanticscholar.org/graph/v1/paper/search`. Retrieves titles, authors, venues, TL;DR summaries, citations, and open-access PDF links with exponential backoff on HTTP 429/503.
+- **`semanticscholar`:** Query `api.semanticscholar.org/graph/v1/paper/search` (or `POLARIS_S2_URL`). Retrieves titles, authors, venues, TL;DR summaries, citations, and open-access PDF links with exponential backoff on HTTP 429/503. Rate limited to >= 1100 ms per request (customizable via `POLARIS_S2_MIN_INTERVAL_MS`, min 1000 ms). Supports optional `SEMANTIC_SCHOLAR_API_KEY` (alias `S2_API_KEY`) configured in the polaris server's `"env"` block of your MCP config (request a key at https://www.semanticscholar.org/product/api; never store keys in git repositories). Keyless access remains the default and continues to work without configuration.
 - **`crossref`:** Query `api.crossref.org/works`. Resolves DOIs, journal publications, and books.
 - **`wikipedia`:** Query `vi` and `en` Wikipedia APIs. Extracts summaries and structured plain text overviews.
 - **`github`:** Query `api.github.com/search/repositories`. Discovers official code implementations and tools (10 req/min unauthenticated rate limit).

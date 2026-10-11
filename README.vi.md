@@ -61,7 +61,7 @@ Dự án song hành cùng [Aurora Slides MCP](https://github.com/DuongNAD/aurora
 
 > **Ghi chú về Cache API:** Toàn bộ dữ liệu bộ nhớ đệm tìm kiếm API 24 giờ được lưu tập trung tại cache hệ thống (`%LOCALAPPDATA%/polaris/cache` hoặc `POLARIS_CACHE_DIR`), giúp tiết kiệm dung lượng cụm đĩa exFAT.
 
-## Danh sách công cụ (v0.3.5)
+## Danh sách công cụ (v0.3.6)
 
 Polaris cung cấp 20 công cụ MCP chia theo 5 nhóm chức năng:
 
@@ -188,7 +188,7 @@ Polaris tích hợp bộ máy tìm kiếm tài liệu tự động không cần 
 ### Các nguồn tìm kiếm (Providers)
 - **`openalex`**: Tìm kiếm bài báo khoa học, số trích dẫn, tóm tắt tái tạo từ inverted index và link PDF Open Access.
 - **`arxiv`**: Giao thức Atom XML API (giới hạn 1 lượt/3s); lấy metadata và tải PDF toàn văn.
-- **`semanticscholar`**: Lấy thông tin bài báo, tóm tắt TL;DR, số trích dẫn và liên kết OA (tự động backoff khi gặp HTTP 429/503).
+- **`semanticscholar`**: Lấy thông tin bài báo, tóm tắt TL;DR, số trích dẫn và liên kết OA (tự động backoff khi gặp HTTP 429/503). Giới hạn giãn cách an toàn tối thiểu 1100 ms giữa các yêu cầu (có thể điều chỉnh bằng `POLARIS_S2_MIN_INTERVAL_MS`, tối thiểu 1000 ms). Hỗ trợ API key tùy chọn qua `SEMANTIC_SCHOLAR_API_KEY` (alias `S2_API_KEY`) trong khối `"env"` của server polaris trên file cấu hình MCP (đăng ký key tại https://www.semanticscholar.org/product/api; tuyệt đối không lưu key trong repo). Chế độ không dùng key (keyless) vẫn là mặc định. Hỗ trợ ghi đè URL gốc qua `POLARIS_S2_URL`.
 - **`crossref`**: Tra cứu DOI, sách và tạp chí học thuật.
 - **`wikipedia`**: Tóm tắt và nội dung toàn văn tiếng Việt (`vi`) và tiếng Anh (`en`).
 - **`github`**: Tìm kiếm kho mã nguồn và công cụ chính thức (giới hạn 10 lượt/phút khi không có token).
@@ -349,6 +349,7 @@ Polaris hoạt động liền mạch cùng [SmartDrive-OS](https://github.com/Du
 
 | Phiên bản | Mô tả |
 |---|---|
+| **0.3.6** | Hỗ trợ API key tùy chọn cho Semantic Scholar (`SEMANTIC_SCHOLAR_API_KEY`, alias `S2_API_KEY`) qua khối cấu hình `"env"` của MCP (đăng ký tại https://www.semanticscholar.org/product/api; không bao giờ lưu key trong kho git; keyless vẫn là mặc định); giới hạn giãn cách an toàn >= 1100 ms kẹp chốt chặn `POLARIS_S2_MIN_INTERVAL_MS` (tối thiểu 1000 ms); loại bỏ triệt để các header nhạy cảm (`authorization`, `proxy-authorization`, `x-api-key`, `cookie`) không phân biệt hoa thường đối với đối tượng Headers, mảng và plain object khi redirect sang origin khác trong `fetchSafeHop`; tuyệt đối không để lộ key trong log, mã lỗi, khóa cache hay kết quả công cụ; bổ sung `POLARIS_S2_URL` phục vụ kiểm thử. |
 | **0.3.5** | Khắc phục các vấn đề phát hiện từ kiểm thử thực tế (dogfooding): Bỏ qua kiểm tra số học đối chiếu chéo (`crossCheck`) cho các quy ước toán học thông dụng (số mũ/chỉ số dưới `R^2`, `x^2`, `O(d^3)`, `O(n log n)`, `w_1`, `L1/L2`, `l1/l2`), thứ nguyên (`1D/2D/3D`, `n×d`), từ chỉ thứ tự cấu trúc (`bước 1`, `slide 3`, mã `M1/M2.1`, `F12/S3`, số trang trong locator), biểu thức LaTeX trong `$...$` và mã nội dòng; giữ nguyên kiểm tra cho các số đo thực nghiệm (phần trăm, đơn vị đo, ngày tháng, hệ số `22.22x`, `50 TOPS`); ưu tiên thu thập bản open-access đã biết (`oaUrl`) trước đồng thời lưu giữ link nhà xuất bản gốc; nhận diện bot wall interstitial (< 1500 ký tự với dấu hiệu thử thách mạnh) tránh bắt nhầm bài viết thông thường; dùng chung cơ chế thu thập HTML/PDF cho open-access; kiểm tra robots.txt cho cả URL open-access; tự động fallback sang Open Access qua OpenAlex và Unpaywall khi URL gặp 401/403/429 hoặc bot wall / captcha; tài liệu hóa trường `roadmapPath` trong brief. |
 | **0.3.4** | Rào chắn bảo mật SSRF: Chặn Server-Side Request Forgery trong thu thập nguồn tài liệu và tra cứu nghiên cứu. Chỉ cho phép giao thức http/https, phân giải host qua DNS (`node:dns`), từ chối loopback (127/8, ::1), unspecified (0.0.0.0, ::), dải mạng riêng tư (10/8, 172.16/12, 192.168/16, fc00::/7), link-local / metadata cloud (169.254/16, fe80::/10), CGNAT (100.64/10), multicast, các dải dành riêng, IPv4-mapped IPv6 và localhost/*.localhost. Thủ công kiểm tra chuyển hướng redirect (tối đa 5 bước nhảy) trên từng bước. Bật `POLARIS_ALLOW_PRIVATE_URLS=1` khi cần kiểm thử cục bộ có chủ đích. |
 | **0.3.3** | Tích hợp Vega MCP: Đọc số lượng thẻ Vega FSRS đến hạn (`<hub>/.vega/cards.json`) trong `polaris_today` kèm phân bổ 10 phút vào công thức buổi học; nhận diện và bỏ qua các sự kiện tiến độ loại "card" trong `polaris_progress_sync`. |
