@@ -57,7 +57,7 @@ Dự án song hành cùng [Aurora Slides MCP](https://github.com/DuongNAD/aurora
 
 > **Ghi chú về Cache API:** Toàn bộ dữ liệu bộ nhớ đệm tìm kiếm API 24 giờ được lưu tập trung tại cache hệ thống (`%LOCALAPPDATA%/polaris/cache` hoặc `POLARIS_CACHE_DIR`), giúp tiết kiệm dung lượng cụm đĩa exFAT.
 
-## Danh sách công cụ (v0.3.3)
+## Danh sách công cụ (v0.3.4)
 
 Polaris cung cấp 20 công cụ MCP chia theo 5 nhóm chức năng:
 
@@ -68,7 +68,9 @@ Polaris cung cấp 20 công cụ MCP chia theo 5 nhóm chức năng:
 | `polaris_profile` | Đọc (`get`) hoặc cập nhật (`update`) hồ sơ người học, khung giờ tuần (`slots`), ngày bận (`blackouts`) và công thức buổi học. |
 | `polaris_start` | Khởi tạo thư mục môn học, thiết lập `polaris/brief.json` và cấu hình `.gitignore`. |
 
-### 2. Nghiên cứu & Nguồn tài liệu
+### 2. Nghiên cứu & Nguồn tài liệu (kèm Rào chắn SSRF)
+Toàn bộ các yêu cầu mạng ra ngoài (trang web, arXiv, PDF Open Access, Wikipedia, API provider và kiểm tra robots.txt) đều được bảo vệ bởi rào chắn SSRF: chỉ cho phép giao thức `http:` và `https:`; phân giải tên miền qua DNS (`node:dns`) và từ chối các địa chỉ nội bộ/cục bộ (loopback, mạng LAN riêng tư, link-local metadata 169.254.169.254, CGNAT, multicast, các dải dành riêng, IPv4-mapped IPv6 và localhost); theo dõi chuyển hướng thủ công (tối đa 5 bước nhảy) và kiểm tra lại trên từng bước. Sử dụng `POLARIS_ALLOW_PRIVATE_URLS=1` khi cần kiểm thử cục bộ có chủ đích.
+
 | Công cụ | Mô tả |
 |---|---|
 | `polaris_find` | Tìm kiếm tài liệu học tập qua các nhà cung cấp không cần API key với điểm số, lý do đánh giá và link Open Access. |
@@ -343,6 +345,7 @@ Polaris hoạt động liền mạch cùng [SmartDrive-OS](https://github.com/Du
 
 | Phiên bản | Mô tả |
 |---|---|
+| **0.3.4** | Rào chắn bảo mật SSRF: Chặn Server-Side Request Forgery trong thu thập nguồn tài liệu và tra cứu nghiên cứu. Chỉ cho phép giao thức http/https, phân giải host qua DNS (`node:dns`), từ chối loopback (127/8, ::1), unspecified (0.0.0.0, ::), dải mạng riêng tư (10/8, 172.16/12, 192.168/16, fc00::/7), link-local / metadata cloud (169.254/16, fe80::/10), CGNAT (100.64/10), multicast, các dải dành riêng, IPv4-mapped IPv6 và localhost/*.localhost. Thủ công kiểm tra chuyển hướng redirect (tối đa 5 bước nhảy) trên từng bước. Bật `POLARIS_ALLOW_PRIVATE_URLS=1` khi cần kiểm thử cục bộ có chủ đích. |
 | **0.3.3** | Tích hợp Vega MCP: Đọc số lượng thẻ Vega FSRS đến hạn (`<hub>/.vega/cards.json`) trong `polaris_today` kèm phân bổ 10 phút vào công thức buổi học; nhận diện và bỏ qua các sự kiện tiến độ loại "card" trong `polaris_progress_sync`. |
 | **0.3.2** | Tương thích ổ exFAT SSD và SmartDrive-OS: Di chuyển bộ nhớ đệm API tìm kiếm 24h ra ngoài thư mục môn học về cache hệ thống (%LOCALAPPDATA%/polaris/cache hoặc POLARIS_CACHE_DIR) kèm thông báo dọn dẹp cache cũ; thêm hook tự động báo SmartDrive cập nhật chỉ mục (coalesced 2s, POLARIS_SMARTDRIVE=off, POLARIS_SMARTDRIVE_CMD). |
 | **0.3.1** | Cải tiến Sổ lỗi khi đồng bộ tiến độ Aurora 0.6.1: Hiển thị văn bản phương án trắc nghiệm (chosenText/answerText), giải thích (explanation), gợi ý tự điền cho "Nguyên nhân gốc rễ", "Bài học rút ra" và "Neo" ghi nhớ. |

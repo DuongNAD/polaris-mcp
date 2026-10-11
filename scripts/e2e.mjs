@@ -126,6 +126,84 @@ ok(
   rankedFixtureItems[0]?.reasons?.join("; "),
 );
 
+/* ───────── 1.7 SSRF Guard & IP Range Checks (Unit Tests) ───────── */
+
+console.log("\n--- SSRF Guard & IP Range Checks (Unit Tests) ---");
+
+// IPv4 Range Checks
+ok("refuse IPv4 loopback 127.0.0.1", polarisLib.isPrivateIp("127.0.0.1"));
+ok("refuse IPv4 loopback 127.255.255.255", polarisLib.isPrivateIp("127.255.255.255"));
+ok("refuse IPv4 unspecified 0.0.0.0", polarisLib.isPrivateIp("0.0.0.0"));
+ok("refuse IPv4 private 10.0.0.1", polarisLib.isPrivateIp("10.0.0.1"));
+ok("refuse IPv4 private 172.16.0.1", polarisLib.isPrivateIp("172.16.0.1"));
+ok("refuse IPv4 private 172.31.255.255", polarisLib.isPrivateIp("172.31.255.255"));
+ok("allow IPv4 public 172.32.0.1", !polarisLib.isPrivateIp("172.32.0.1"));
+ok("refuse IPv4 private 192.168.1.1", polarisLib.isPrivateIp("192.168.1.1"));
+ok("refuse IPv4 link-local 169.254.169.254", polarisLib.isPrivateIp("169.254.169.254"));
+ok("refuse IPv4 CGNAT 100.64.0.1", polarisLib.isPrivateIp("100.64.0.1"));
+ok("refuse IPv4 CGNAT 100.127.255.255", polarisLib.isPrivateIp("100.127.255.255"));
+ok("allow IPv4 public 100.128.0.1", !polarisLib.isPrivateIp("100.128.0.1"));
+ok("refuse IPv4 multicast 224.0.0.1", polarisLib.isPrivateIp("224.0.0.1"));
+ok("refuse IPv4 reserved 240.0.0.1", polarisLib.isPrivateIp("240.0.0.1"));
+ok("refuse IPv4 broadcast 255.255.255.255", polarisLib.isPrivateIp("255.255.255.255"));
+ok("allow IPv4 public 8.8.8.8", !polarisLib.isPrivateIp("8.8.8.8"));
+ok("allow IPv4 public 1.1.1.1", !polarisLib.isPrivateIp("1.1.1.1"));
+
+// IPv6 Range Checks
+ok("refuse IPv6 loopback ::1", polarisLib.isPrivateIp("::1"));
+ok("refuse IPv6 unspecified ::", polarisLib.isPrivateIp("::"));
+ok("refuse IPv6 ULA fc00::1", polarisLib.isPrivateIp("fc00::1"));
+ok("refuse IPv6 ULA fd12:3456::1", polarisLib.isPrivateIp("fd12:3456::1"));
+ok("refuse IPv6 link-local fe80::1", polarisLib.isPrivateIp("fe80::1"));
+ok("refuse IPv6 multicast ff02::1", polarisLib.isPrivateIp("ff02::1"));
+ok("refuse IPv6 documentation 2001:db8::1", polarisLib.isPrivateIp("2001:db8::1"));
+ok("allow IPv6 public 2606:2800:220:1:248:1893:25c8:1946", !polarisLib.isPrivateIp("2606:2800:220:1:248:1893:25c8:1946"));
+
+// IPv4-mapped IPv6 Checks
+ok("refuse IPv4-mapped loopback ::ffff:127.0.0.1", polarisLib.isPrivateIp("::ffff:127.0.0.1"));
+ok("refuse IPv4-mapped loopback hex ::ffff:7f00:1", polarisLib.isPrivateIp("::ffff:7f00:1"));
+ok("refuse IPv4-mapped private ::ffff:192.168.1.1", polarisLib.isPrivateIp("::ffff:192.168.1.1"));
+ok("refuse IPv4-mapped link-local ::ffff:169.254.169.254", polarisLib.isPrivateIp("::ffff:169.254.169.254"));
+ok("allow IPv4-mapped public ::ffff:8.8.8.8", !polarisLib.isPrivateIp("::ffff:8.8.8.8"));
+
+// assertSafeUrl unit checks (opt-in unset)
+delete process.env.POLARIS_ALLOW_PRIVATE_URLS;
+let err127 = "";
+try { await polarisLib.assertSafeUrl("http://127.0.0.1:8080/x"); } catch (e) { err127 = (e).message; }
+ok("assertSafeUrl refuses 127.0.0.1", err127 === "Refused: 127.0.0.1 resolves to a private or local address", err127);
+
+let errLocalhost = "";
+try { await polarisLib.assertSafeUrl("http://localhost/x"); } catch (e) { errLocalhost = (e).message; }
+ok("assertSafeUrl refuses localhost", errLocalhost === "Refused: localhost resolves to a private or local address", errLocalhost);
+
+let errSubLocalhost = "";
+try { await polarisLib.assertSafeUrl("http://api.localhost/x"); } catch (e) { errSubLocalhost = (e).message; }
+ok("assertSafeUrl refuses *.localhost", errSubLocalhost === "Refused: api.localhost resolves to a private or local address", errSubLocalhost);
+
+let errMeta = "";
+try { await polarisLib.assertSafeUrl("http://169.254.169.254/latest"); } catch (e) { errMeta = (e).message; }
+ok("assertSafeUrl refuses 169.254.169.254", errMeta === "Refused: 169.254.169.254 resolves to a private or local address", errMeta);
+
+let errFile = "";
+try { await polarisLib.assertSafeUrl("file:///C:/Windows/win.ini"); } catch (e) { errFile = (e).message; }
+ok("assertSafeUrl refuses file scheme", errFile.includes("Refused: scheme") && errFile.includes("not allowed"), errFile);
+
+// assertSafeUrl with POLARIS_ALLOW_PRIVATE_URLS=1
+process.env.POLARIS_ALLOW_PRIVATE_URLS = "1";
+let allowedPrivate = false;
+try {
+  const u = await polarisLib.assertSafeUrl("http://127.0.0.1:8080/x");
+  allowedPrivate = Boolean(u);
+} catch {
+  allowedPrivate = false;
+}
+ok("POLARIS_ALLOW_PRIVATE_URLS=1 allows 127.0.0.1", allowedPrivate);
+
+let errFileWithOptIn = "";
+try { await polarisLib.assertSafeUrl("file:///C:/Windows/win.ini"); } catch (e) { errFileWithOptIn = (e).message; }
+ok("POLARIS_ALLOW_PRIVATE_URLS=1 still refuses file scheme", errFileWithOptIn.includes("Refused: scheme"), errFileWithOptIn);
+delete process.env.POLARIS_ALLOW_PRIVATE_URLS;
+
 /* ───────── 2. Local Fixture HTTP Server ───────── */
 
 const fixtureHtml = `<!DOCTYPE html>
@@ -153,12 +231,31 @@ const fixtureHtml = `<!DOCTYPE html>
 </html>`;
 
 const httpServer = createServer((req, res) => {
+  if (req.url === "/redirect_to_loopback") {
+    res.writeHead(302, { Location: `http://127.0.0.1:${httpPort}/react_paper.html` });
+    res.end();
+    return;
+  }
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
   res.end(fixtureHtml);
 });
 await new Promise((res) => httpServer.listen(0, "127.0.0.1", res));
 const httpPort = httpServer.address().port;
 const fixtureUrl = `http://127.0.0.1:${httpPort}/react_paper.html`;
+
+// Unit redirect check: simulate allowed host on first hop, verify redirect to 127.0.0.1 is refused
+delete process.env.POLARIS_ALLOW_PRIVATE_URLS;
+let errRedirect = "";
+try {
+  await polarisLib.fetchWithTimeout(`http://127.0.0.1:${httpPort}/redirect_to_loopback`, { allowFirstHop: true });
+} catch (e) {
+  errRedirect = (e).message;
+}
+ok(
+  "redirect from allowed fixture host to 127.0.0.1 is refused",
+  errRedirect.includes("Refused: 127.0.0.1 resolves to a private or local address"),
+  errRedirect,
+);
 
 const localNotePath = join(TEST_DIR, "lecture_notes.md");
 writeFileSync(
@@ -171,6 +268,51 @@ writeFileSync(
 
 console.log("\n--- Real MCP Server Stdio Tests ---");
 
+// 3.0 SSRF blocking tests over real MCP stdio with opt-in unset
+console.log("\n--- SSRF Blocking Tests over MCP stdio (opt-in unset) ---");
+const ssrfTransport = new StdioClientTransport({
+  command: process.execPath,
+  args: [join(ROOT, "dist", "polaris.mjs")],
+  stderr: "inherit",
+  env: {
+    ...process.env,
+    POLARIS_CACHE_DIR: CACHE_DIR,
+    POLARIS_SMARTDRIVE_CMD: `node "${SMARTDRIVE_SCRIPT}" "${SMARTDRIVE_LOG}"`,
+    POLARIS_ALLOW_PRIVATE_URLS: undefined,
+  },
+});
+const ssrfClient = new Client({ name: "polaris-ssrf-check", version: "1.0.0" });
+await ssrfClient.connect(ssrfTransport);
+const ssrfCall = (name, args = {}) => ssrfClient.callTool({ name, arguments: args }, undefined, { timeout: 30000 });
+
+// Capturing 127.0.0.1, localhost, 169.254.169.254, file scheme is refused with the message
+const rLoopback = await ssrfCall("polaris_source_add", {
+  subject_dir: SUBJECT_DIR,
+  sources: [{ id: "SSRF_1", kind: "web", url: `http://127.0.0.1:${httpPort}/x` }],
+});
+ok("MCP polaris_source_add refuses 127.0.0.1", textOf(rLoopback).includes("Refused: 127.0.0.1 resolves to a private or local address"), textOf(rLoopback).slice(0, 100));
+
+const rLocalhost = await ssrfCall("polaris_source_add", {
+  subject_dir: SUBJECT_DIR,
+  sources: [{ id: "SSRF_2", kind: "web", url: "http://localhost/x" }],
+});
+ok("MCP polaris_source_add refuses localhost", textOf(rLocalhost).includes("Refused: localhost resolves to a private or local address"), textOf(rLocalhost).slice(0, 100));
+
+const rMetadata = await ssrfCall("polaris_source_add", {
+  subject_dir: SUBJECT_DIR,
+  sources: [{ id: "SSRF_3", kind: "web", url: "http://169.254.169.254/latest" }],
+});
+ok("MCP polaris_source_add refuses 169.254.169.254", textOf(rMetadata).includes("Refused: 169.254.169.254 resolves to a private or local address"), textOf(rMetadata).slice(0, 100));
+
+const rFile = await ssrfCall("polaris_source_add", {
+  subject_dir: SUBJECT_DIR,
+  sources: [{ id: "SSRF_4", kind: "web", url: "file:///C:/Windows/win.ini" }],
+});
+ok("MCP polaris_source_add refuses file URL", textOf(rFile).includes("Refused: scheme") && textOf(rFile).includes("not allowed"), textOf(rFile).slice(0, 100));
+
+await ssrfClient.close();
+
+// Main MCP client runs with POLARIS_ALLOW_PRIVATE_URLS=1 so local fixture server works
 const client = new Client({ name: "polaris-e2e", version: "1.0.0" });
 const transport = new StdioClientTransport({
   command: process.execPath,
@@ -180,6 +322,7 @@ const transport = new StdioClientTransport({
     ...process.env,
     POLARIS_CACHE_DIR: CACHE_DIR,
     POLARIS_SMARTDRIVE_CMD: `node "${SMARTDRIVE_SCRIPT}" "${SMARTDRIVE_LOG}"`,
+    POLARIS_ALLOW_PRIVATE_URLS: "1",
   },
 });
 
@@ -1089,7 +1232,7 @@ try {
   ok("CLI today", todayCli.includes("Kế hoạch phiên học") && todayCli.includes("## Today's Dynamic Goal"));
 
   const versionCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "version"], { encoding: "utf8" });
-  ok("CLI version 0.3.3", versionCli.trim() === "0.3.3");
+  ok("CLI version 0.3.4", versionCli.trim() === "0.3.4");
 
   const helpCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "help"], { encoding: "utf8" });
   ok("CLI help", helpCli.includes("Usage: node polaris.mjs") && helpCli.includes("progress <subject_dir>") && helpCli.includes("today <subject_dir>"));

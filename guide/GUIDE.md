@@ -80,6 +80,12 @@ Quality gates run during `polaris_check` and `polaris_roadmap_save`:
 - For local files, search with the `smart-drive` MCP; never run recursive scans across D:.
 - NotebookLM and DeepTutor answers should be registered with the notebook topic and prompt as locator.
 
+**Security & SSRF Guard (v0.3.4):**
+- **Strict Protocol Restriction:** Outbound captures only permit `http:` and `https:` schemes. Non-http schemes (`file:`, etc.) are immediately refused.
+- **Private & Local Address Blocking:** Every host is resolved via DNS (`node:dns`) with all addresses checked. Polaris refuses loopback (`127.0.0.0/8`, `::1`), unspecified (`0.0.0.0`, `::`), private LANs (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`), link-local / cloud metadata (`169.254.0.0/16`, `fe80::/10`), CGNAT (`100.64.0.0/10`), multicast (`224.0.0.0/4`, `ff00::/8`), reserved ranges, IPv4-mapped IPv6 forms of those, and hostnames `localhost` / `*.localhost`.
+- **Manual Redirect Protection:** Redirects are followed manually (max 5 hops) and every hop is strictly re-validated through the guard to prevent SSRF via redirect.
+- **Opt-In for Local Testing:** `POLARIS_ALLOW_PRIVATE_URLS=1` disables the private address restriction for deliberate local testing while preserving the `http`/`https` scheme requirement.
+
 ## roadmap
 
 The rendered `ROADMAP.md` mirrors the gold-standard 10-section layout in Vietnamese:
@@ -133,6 +139,7 @@ Every discovered item is scored (0-100) and comes with explicit, human-readable 
 - **robots.txt:** Evaluated and cached per host before fetching arbitrary web pages for capture.
 - **Open Access Only:** Captures only open-access PDFs, public YouTube transcripts, Wikipedia text, and open web pages. Never bypasses paywalls.
 - **Local Personal Study Copies:** Third-party captures (`polaris/captures/`) and query caches (`polaris/.cache/`, 24h TTL) are strictly git-ignored.
+- **SSRF Guard:** All outbound provider queries, robots.txt lookups, redirect hops, and automatic captures pass through Polaris's outbound SSRF guard, blocking requests to internal, private, or local network resources.
 
 **The Review Gate:**
 When running research (`polaris_research`), Polaris generates a tracked shortlist file (`polaris/research/<yyyy-mm-dd>-<slug>.md`) containing the ranked table and evaluation reasons.

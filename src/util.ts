@@ -1,14 +1,15 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import dns from "node:dns/promises";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const VERSION = "0.3.3";
+export const VERSION = "0.3.4";
 export const PKG_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-export const UA = `Polaris/0.3.3 (personal study course builder; https://github.com/DuongNAD) Node.js/${process.versions.node}`;
+export const UA = `Polaris/0.3.4 (personal study course builder; https://github.com/DuongNAD) Node.js/${process.versions.node}`;
 
 export function hubDir(): string {
   return resolve(process.env.POLARIS_HUB ?? "D:/02_Learning_Knowledge");
@@ -202,18 +203,266 @@ export async function writeJson(path: string, data: unknown): Promise<void> {
   await atomicWriteFile(path, JSON.stringify(data, null, 2) + "\n");
 }
 
-export async function fetchWithTimeout(url: string, init: RequestInit = {}, ms = 20000): Promise<Response> {
+/* ───────── SSRF Guard & IP Range Checks ───────── */
+
+export function parseIpv4(ip: string): number | null {
+  const parts = ip.split(".");
+  if (parts.length !== 4) return null;
+  let num = 0;
+  for (let i = 0; i < 4; i++) {
+    const part = parts[i]!;
+    if (!/^\d+$/.test(part)) return null;
+    const n = parseInt(part, 10);
+    if (n < 0 || n > 255) return null;
+    num = (num << 8) | n;
+  }
+  return num >>> 0;
+}
+
+export function isPrivateIpv4(num: number): boolean {
+  if ((num >>> 24) === 0) return true;       // 0.0.0.0/8 (unspecified)
+  if ((num >>> 24) === 10) return true;      // 10.0.0.0/8 (private)
+  if ((num >>> 22) === 0x191) return true;   // 100.64.0.0/10 (CGNAT)
+  if ((num >>> 24) === 127) return true;     // 127.0.0.0/8 (loopback)
+  if ((num >>> 16) === 0xa9fe) return true;  // 169.254.0.0/16 (link-local)
+  if ((num >>> 20) === 0xac1) return true;   // 172.16.0.0/12 (private)
+  if ((num >>> 8) === 0xc00000) return true; // 192.0.0.0/24 (IETF protocol assignments)
+  if ((num >>> 8) === 0xc00002) return true; // 192.0.2.0/24 (TEST-NET-1)
+  if ((num >>> 16) === 0xc0a8) return true;  // 192.168.0.0/16 (private)
+  if ((num >>> 17) === 25353) return true;   // 198.18.0.0/15 (benchmarking)
+  if ((num >>> 8) === 0xc63364) return true; // 198.51.100.0/24 (TEST-NET-2)
+  if ((num >>> 8) === 0xcb0071) return true; // 203.0.113.0/24 (TEST-NET-3)
+  if ((num >>> 28) === 14) return true;      // 224.0.0.0/4 (multicast)
+  if ((num >>> 28) === 15) return true;      // 240.0.0.0/4 (reserved & broadcast)
+  return false;
+}
+
+export function parseIpv6(ip: string): number[] | null {
+  const clean = ip.split("%")[0]!.trim().toLowerCase();
+  let hexStr = clean;
+  const lastColon = clean.lastIndexOf(":");
+  if (lastColon >= 0) {
+    const afterLastColon = clean.slice(lastColon + 1);
+    if (afterLastColon.includes(".")) {
+      const ipv4Num = parseIpv4(afterLastColon);
+      if (ipv4Num === null) return null;
+      const hi = (ipv4Num >>> 16).toString(16);
+      const lo = (ipv4Num & 0xffff).toString(16);
+      hexStr = `${clean.slice(0, lastColon)}:${hi}:${lo}`;
+    }
+  }
+  if (hexStr.includes(":::")) return null;
+  const dc = (hexStr.match(/::/g) || []).length;
+  if (dc > 1) return null;
+  const words: number[] = [];
+  if (dc === 1) {
+    const [left, right] = hexStr.split("::");
+    const leftParts = left ? left.split(":") : [];
+    const rightParts = right ? right.split(":") : [];
+    if (leftParts.length + rightParts.length > 7) return null;
+    const missing = 8 - (leftParts.length + rightParts.length);
+    const middle = Array(missing).fill("0");
+    const all = [...leftParts, ...middle, ...rightParts];
+    for (const part of all) {
+      if (!/^[0-9a-f]{1,4}$/.test(part)) return null;
+      words.push(parseInt(part, 16));
+    }
+  } else {
+    const parts = hexStr.split(":");
+    if (parts.length !== 8) return null;
+    for (const part of parts) {
+      if (!/^[0-9a-f]{1,4}$/.test(part)) return null;
+      words.push(parseInt(part, 16));
+    }
+  }
+  return words.length === 8 ? words : null;
+}
+
+export function isPrivateIpv6(w: number[]): boolean {
+  // 1. Unspecified: ::
+  if (w.every((x) => x === 0)) return true;
+
+  // 2. Loopback: ::1
+  if (w.slice(0, 7).every((x) => x === 0) && w[7] === 1) return true;
+
+  // 3. IPv4-mapped IPv6: ::ffff:0:0/96
+  if (w.slice(0, 5).every((x) => x === 0) && w[5] === 0xffff) {
+    const v4 = ((w[6]! << 16) | w[7]!) >>> 0;
+    return isPrivateIpv4(v4);
+  }
+
+  // 4. IPv4-compatible IPv6 (deprecated): ::/96
+  if (w.slice(0, 6).every((x) => x === 0)) {
+    const v4 = ((w[6]! << 16) | w[7]!) >>> 0;
+    return isPrivateIpv4(v4);
+  }
+
+  // 5. 6to4: 2002::/16
+  if (w[0] === 0x2002) {
+    const v4 = ((w[1]! << 16) | w[2]!) >>> 0;
+    return isPrivateIpv4(v4);
+  }
+
+  // 6. Well-Known Prefix for IPv4/IPv6 translation (NAT64): 64:ff9b::/96
+  if (w[0] === 0x0064 && w[1] === 0xff9b && w.slice(2, 6).every((x) => x === 0)) {
+    const v4 = ((w[6]! << 16) | w[7]!) >>> 0;
+    return isPrivateIpv4(v4);
+  }
+
+  // 7. Unique Local Address (ULA / private): fc00::/7
+  if ((w[0]! & 0xfe00) === 0xfc00) return true;
+
+  // 8. Link-local unicast: fe80::/10
+  if ((w[0]! & 0xffc0) === 0xfe80) return true;
+
+  // 9. Site-local (deprecated RFC 3879): fec0::/10
+  if ((w[0]! & 0xffc0) === 0xfec0) return true;
+
+  // 10. Multicast: ff00::/8
+  if ((w[0]! & 0xff00) === 0xff00) return true;
+
+  // 11. Documentation: 2001:db8::/32
+  if (w[0] === 0x2001 && w[1] === 0x0db8) return true;
+
+  // 12. Discard-only: 100::/64
+  if (w[0] === 0x0100 && w[1] === 0 && w[2] === 0 && w[3] === 0) return true;
+
+  return false;
+}
+
+export function isPrivateIp(ip: string): boolean {
+  const v4 = parseIpv4(ip);
+  if (v4 !== null) return isPrivateIpv4(v4);
+  const v6 = parseIpv6(ip);
+  if (v6 !== null) return isPrivateIpv6(v6);
+  return false;
+}
+
+export async function assertSafeUrl(urlStr: string): Promise<URL> {
+  let u: URL;
+  try {
+    u = new URL(urlStr);
+  } catch {
+    throw new Error(`Refused: invalid URL "${urlStr}"`);
+  }
+
+  if (u.protocol !== "http:" && u.protocol !== "https:") {
+    throw new Error(`Refused: scheme "${u.protocol}" is not allowed (only http and https)`);
+  }
+
+  if (process.env.POLARIS_ALLOW_PRIVATE_URLS === "1") {
+    return u;
+  }
+
+  const host = u.hostname.replace(/^\[|\]$/g, "");
+  if (!host) {
+    throw new Error(`Refused: empty host in URL`);
+  }
+
+  const cleanHost = host.toLowerCase().replace(/\.+$/, "");
+  if (cleanHost === "localhost" || cleanHost.endsWith(".localhost")) {
+    throw new Error(`Refused: ${host} resolves to a private or local address`);
+  }
+
+  if (isPrivateIp(cleanHost)) {
+    throw new Error(`Refused: ${host} resolves to a private or local address`);
+  }
+
+  let addresses: Array<{ address: string; family: number }>;
+  try {
+    addresses = await dns.lookup(cleanHost, { all: true });
+  } catch (err) {
+    throw new Error(`Refused: failed to resolve host "${host}": ${(err as Error).message}`);
+  }
+
+  if (!addresses || addresses.length === 0) {
+    throw new Error(`Refused: ${host} resolves to no addresses`);
+  }
+
+  for (const addr of addresses) {
+    if (isPrivateIp(addr.address)) {
+      throw new Error(`Refused: ${host} resolves to a private or local address`);
+    }
+  }
+
+  return u;
+}
+
+export type SafeFetchInit = RequestInit & {
+  allowFirstHop?: boolean;
+};
+
+export async function fetchSafeHop(
+  currentUrl: string,
+  init: SafeFetchInit,
+  signal: AbortSignal,
+  hopCount = 0,
+): Promise<Response> {
+  if (hopCount > 5) {
+    throw new Error("Refused: too many redirects (max 5)");
+  }
+
+  if (hopCount === 0 && init.allowFirstHop) {
+    const u = new URL(currentUrl);
+    if (u.protocol !== "http:" && u.protocol !== "https:") {
+      throw new Error(`Refused: scheme "${u.protocol}" is not allowed (only http and https)`);
+    }
+  } else {
+    await assertSafeUrl(currentUrl);
+  }
+
+  const res = await fetch(currentUrl, {
+    ...init,
+    redirect: "manual",
+    signal,
+    headers: {
+      "User-Agent": UA,
+      ...(init.headers ?? {}),
+    },
+  });
+
+  if ([301, 302, 303, 307, 308].includes(res.status)) {
+    const location = res.headers.get("location");
+    if (location) {
+      const currentUrlObj = new URL(currentUrl);
+      const nextUrlObj = new URL(location, currentUrl);
+      const nextUrl = nextUrlObj.href;
+
+      const nextInit: SafeFetchInit = { ...init };
+      delete nextInit.allowFirstHop;
+
+      if ([301, 302, 303].includes(res.status)) {
+        nextInit.method = "GET";
+        delete (nextInit as Record<string, unknown>).body;
+      }
+
+      if (nextUrlObj.origin !== currentUrlObj.origin && nextInit.headers) {
+        if (Array.isArray(nextInit.headers)) {
+          nextInit.headers = nextInit.headers.filter(([k]) => typeof k === "string" && k.toLowerCase() !== "authorization");
+        } else if (typeof nextInit.headers === "object") {
+          const h = { ...nextInit.headers } as Record<string, string>;
+          delete h["authorization"];
+          delete h["Authorization"];
+          nextInit.headers = h;
+        }
+      }
+
+      return fetchSafeHop(nextUrl, nextInit, signal, hopCount + 1);
+    }
+  }
+
+  return res;
+}
+
+export async function fetchWithTimeout(
+  url: string,
+  init: SafeFetchInit = {},
+  ms = 20000,
+): Promise<Response> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), ms);
   try {
-    return await fetch(url, {
-      ...init,
-      signal: ctl.signal,
-      headers: {
-        "User-Agent": UA,
-        ...(init.headers ?? {}),
-      },
-    });
+    return await fetchSafeHop(url, init, ctl.signal, 0);
   } finally {
     clearTimeout(timer);
   }
@@ -236,7 +485,7 @@ export async function rateLimitedDelay(provider: string, minIntervalMs: number):
 
 export async function fetchWithRetry(
   url: string,
-  init: RequestInit = {},
+  init: SafeFetchInit = {},
   ms = 20000,
   maxRetries = 2,
 ): Promise<Response> {
@@ -246,14 +495,7 @@ export async function fetchWithRetry(
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), ms);
     try {
-      const res = await fetch(url, {
-        ...init,
-        signal: ctl.signal,
-        headers: {
-          "User-Agent": UA,
-          ...(init.headers ?? {}),
-        },
-      });
+      const res = await fetchSafeHop(url, init, ctl.signal, 0);
 
       if ((res.status === 429 || res.status === 503) && attempt <= maxRetries) {
         const retryAfterHeader = res.headers.get("retry-after");
@@ -269,6 +511,9 @@ export async function fetchWithRetry(
       }
       return res;
     } catch (err) {
+      if ((err as Error).message?.startsWith("Refused:")) {
+        throw err;
+      }
       if (attempt <= maxRetries) {
         await new Promise((r) => setTimeout(r, attempt * 1000));
         continue;
@@ -314,6 +559,8 @@ function parseRobotsTxt(txt: string): { userAgent: string; disallow: string[] }[
 }
 
 export async function isUrlAllowedByRobots(urlStr: string): Promise<boolean> {
+  await assertSafeUrl(urlStr);
+
   try {
     const u = new URL(urlStr);
     const hostKey = u.origin;
@@ -329,7 +576,10 @@ export async function isUrlAllowedByRobots(urlStr: string): Promise<boolean> {
           const txt = await res.text();
           rules = parseRobotsTxt(txt);
         }
-      } catch {
+      } catch (err) {
+        if ((err as Error).message?.startsWith("Refused:")) {
+          throw err;
+        }
         // Assume allowed if unreachable
       }
       cached = { rules, fetchedAt: now };
@@ -350,7 +600,10 @@ export async function isUrlAllowedByRobots(urlStr: string): Promise<boolean> {
       }
     }
     return true;
-  } catch {
+  } catch (err) {
+    if ((err as Error).message?.startsWith("Refused:")) {
+      throw err;
+    }
     return true;
   }
 }

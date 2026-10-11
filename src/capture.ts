@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { notifySmartDrive } from "./smartdrive.js";
 import {
+  assertSafeUrl,
   atomicWriteFile,
   fetchWithRetry,
   fetchWithTimeout,
@@ -321,6 +322,8 @@ export function parseVttToTranscript(vttContent: string): string {
 }
 
 export async function extractYoutubeTranscript(videoUrl: string): Promise<{ title?: string; transcript: string }> {
+  await assertSafeUrl(videoUrl);
+
   const ytdlp = findExecutable([
     "yt-dlp",
     "yt-dlp.exe",
@@ -455,6 +458,13 @@ export async function captureSource(
   const accessed = todayIso();
   const rawUrl = input.url?.trim();
   const rawPath = input.path?.trim();
+
+  if (rawUrl) {
+    await assertSafeUrl(rawUrl);
+  }
+  if (rawPath && (rawPath.startsWith("file:") || rawPath.startsWith("http:") || rawPath.startsWith("https:"))) {
+    await assertSafeUrl(rawPath);
+  }
 
   // 1. YouTube Video
   const ytId = rawUrl ? parseYoutubeId(rawUrl) : undefined;
