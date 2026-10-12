@@ -11,6 +11,8 @@ Polaris operates on five core principles:
 4. **Quality gates:** The pipeline checks brief completeness, source labels and quality scores, fact locators, outcome coverage, dependency DAG cycles, and flags overclaims before finalizing the roadmap.
 5. **Files, not databases:** Plain JSON and Markdown inside the subject folder (`polaris/brief.json`, `sources.json`, `facts.json`, `roadmap.json`, `captures/`). Captured third-party text is kept local and git-ignored.
 
+**One review engine (v0.4.0):** spaced reviews are scheduled by a single adaptive engine, Vega (FSRS), not by Polaris's own fixed D+1/D+3/D+7/D+16/D+35 steps. Polaris keeps the human-readable error log ("Sổ lỗi") and hands review items to Vega through a shared inbox (`<hub>/.vega/inbox/`, contract `vega-card-inbox.v1`); the learner then runs `vega_sync` and `vega_session`. The profile field `method.reviewEngine` (`"vega"` or `"fixed"`) overrides the automatic choice (vega when `<hub>/.vega/` exists, else fixed). See the `tracking` and `learner` topics.
+
 ## pipeline
 
 The Polaris workflow follows 4 distinct stages:
@@ -206,10 +208,21 @@ Export personal study courses into Aurora Slides decks with structured lesson sk
 ## tracking
 
 Track mastery, errors, and scheduled reviews:
-- **Sổ lỗi (Error Log):** `polaris_errorlog_add` records runtime prediction gaps in `polaris/errorlog.md` with date, prediction, actual result, root cause (`why`), rule/fix, and sources.
-- **Spaced Review:** Automatically schedules spaced repetition reviews (D+1, D+3, D+7, D+16, D+35) in `polaris/reviews.json` for completed lessons (`polaris_lesson_done`) and error log entries.
+- **Sổ lỗi (Error Log):** `polaris_errorlog_add` records runtime prediction gaps in `polaris/errorlog.md` with date, prediction, actual result, root cause (`why`), rule/fix, and sources. The log stays human-readable under both review engines.
+- **Review engine (who schedules):** the engine in force is `method.reviewEngine` of the learner profile when set; otherwise `vega` when `<hub>/.vega/` exists; otherwise `fixed`. `polaris_profile get` and the `learner` topic show it.
+  - **`vega` (single adaptive engine, v0.4.0):** Vega (FSRS) is the only scheduler. Every path that adds an error log entry (`polaris_errorlog_add`; quiz, predict and recall misses in `polaris_progress_sync`) still appends the same Markdown entry, but its review line becomes ``- **Ôn tập:** thẻ Vega `<key>` (FSRS lập lịch)`` and **nothing is added to `reviews.json`**. Instead Polaris writes one card per entry to the Vega inbox, one inbox file per tool call. Then run `vega_sync`, then `vega_session`.
+  - **`fixed` (original behaviour):** Polaris schedules its own D+1, D+3, D+7, D+16, D+35 steps (`method.spacedReviewDays`) in `polaris/reviews.json` for error log entries and completed lessons.
+- **Why one adaptive engine:** two schedulers on the same item double the reviews and create review debt, so one adaptive scheduler is better than several fixed ones. Meta-analytic evidence finds no reliable difference between expanding and uniform intervals (Latimier, Peyre and Ramus 2021, doi:10.1007/s10648-020-09572-8), so the shape of a fixed ladder is not what buys retention. Personalised review beat one-size-fits-all spacing (Lindsey et al. 2014, doi:10.1177/0956797613504302), which is what an adaptive FSRS scheduler fed by the learner's own ratings provides. Error log reviews must re-solve, never reread (successive relearning, Rawson and Dunlosky 2011, doi:10.1037/a0023956), so each card asks the learner to redo the situation from memory.
+- **Inbox contract `vega-card-inbox.v1` (producer `polaris`):**
+  - Folder `<hub>/.vega/inbox/` (created on demand). One new file per tool call: `polaris-<YYYYMMDDTHHmmss>-<6 hex>.jsonl` (UTC stamp), UTF-8, one JSON object per line, trailing newline. Written atomically as `<name>.jsonl.tmp`, then renamed. Polaris never appends to or rewrites an existing inbox file and never touches Vega's `cards.json` or `reviews.jsonl`.
+  - Every line is validated against the contract before writing (unknown fields are rejected). If any line would be invalid, nothing is written and the errors are reported. Fields used: `v` (1), `t`, `producer` (`polaris`), `key`, `subject` (the subject folder name), `deck`, `kind` (`basic`), `front`, `back`, `origin`, `tags`, `reason`. Text is Vietnamese, without emoji, cut to the contract limits.
+  - Keys (Vega skips keys it already has, so repeats never duplicate cards): `polaris:<subject folder name>:<entry id>` for error log entries (`ERR_YYYY-MM-DD_xxxxxx`), and `polaris:<subject folder name>:selfcheck:<module id>:<index>` (index counts from 1) for lesson self-checks.
+  - Card content: quiz miss, front the question and back the correct answer plus the explanation; predict miss, front what to predict (the title) and back the real output; recall miss, front `<palace> · <place>: mục nào?` and back the item; manual entry, front the situation to re-solve (built from `prediction` and `result`) and back `why` plus `fix`; self-check, front the question and back the answer.
+  - Origins: `polaris-errorlog` (path `polaris/errorlog.md`, locator the entry id) and `polaris-selfcheck` (path `polaris/roadmap.json`, locator `<module id> #<index>`).
+- **Lesson completion:** `polaris_lesson_done` under `vega` writes cards from the self-check questions (`selfCheck {q, answer}`) of the lesson's module (found through `polaris/course-map.json`, or a lesson dir that is itself a module id). If no module or no self-check item is found, nothing is written and the reply says so. The completion itself is recorded in `polaris/progress-state.json` (read by `polaris_today`), never in `reviews.json`. Under `fixed` it records the lesson in `reviews.json` with the D+ steps as before.
+- **Legacy steps:** steps already in `polaris/reviews.json` are never deleted or migrated. `polaris_review_due` and `polaris_today` still list them and, under `vega`, add one line with the Vega due count (read-only from `<hub>/.vega/cards.json`) and the next step `vega_sync, rồi vega_session`.
 - **Task Synchronization:** `polaris_tasks_sync` appends lesson tasks and module checkpoints under `## Polaris` in `<subject>/TASKS.md` in standard hub format (`- [ ] [Deadline: YYYY-MM-DD 23:59] [Priority: P2] ...`), preserving file line endings and preventing duplicates via `polaris/tasks-map.json`.
-- **Daily Review Due:** `polaris_review_due` retrieves all lessons and error log items due on or before today, sorted oldest first, with concise review advice.
+- **Daily Review Due:** `polaris_review_due` retrieves the legacy fixed steps due on or before today, sorted oldest first, with concise review advice; under `vega` it adds the Vega due count line.
 
 ## progress
 
@@ -231,9 +244,10 @@ Each event is a JSON object on a single line:
   - **Quiz entries:** Formatted with a "Câu hỏi" line with the question; "Đã chọn" and "Đáp án đúng" with the option texts when present (fallback to indices `[n]`); "Giải thích" when `explanation` is provided; "Nguyên nhân gốc rễ" left as a reflection prompt for the learner (`(tự điền khi ôn: vì sao chọn sai?)`), never filled with the question.
   - **Predict entries:** Formatted with "Dự đoán" (learner prediction), "Kết quả thật" (actual output snippet), and "Bài học rút ra" (`(tự điền: mental model nào cần sửa?)`).
   - **Recall entries:** Formatted with "Trạm" (palace place), "Ý cần nhớ" (item to recall), and "Neo" (`(tự điền: củng cố hình ảnh liên tưởng giữa trạm và ý cần nhớ)`).
-  - All error log entries automatically schedule spaced repetition reviews (D+1, D+3, D+7, D+16, D+35) in `polaris/reviews.json` and are de-duplicated per `(lesson, slide, type, key)`.
-- **Lesson Completion:** `complete` events automatically mark the lesson done (`polaris_lesson_done`) with the event date and schedule spaced reviews.
-- **Summary & Actionable Guidance:** Returns per-lesson activity, quiz accuracy, prediction accuracy, missed palace stations, new error log entries, reviews due today, count of card events left for Vega, and 1-3 concrete suggestions for the next session.
+  - All error log entries are de-duplicated per `(lesson, slide, type, key)`. Under the `fixed` review engine each entry also schedules spaced repetition reviews (D+1, D+3, D+7, D+16, D+35) in `polaris/reviews.json`. Under the `vega` engine (see `tracking`) the entry's review line points at a Vega card (``- **Ôn tập:** thẻ Vega `<key>` (FSRS lập lịch)``), nothing is added to `reviews.json`, and one card per entry goes to the Vega inbox (`origin.kind` `polaris-errorlog`): a quiz card is question -> correct answer (+ explanation), a predict card is title -> real output, a recall card is `<palace> · <place>: mục nào?` -> item.
+- **Lesson Completion:** `complete` events automatically mark the lesson done (`polaris_lesson_done`) with the event date. Under `fixed` this schedules the D+ reviews. Under `vega` the lesson's module self-check questions become cards (`origin.kind` `polaris-selfcheck`, key `polaris:<subject>:selfcheck:<module id>:<index>`) and join the same inbox file; the completion is kept in `polaris/progress-state.json`.
+- **One inbox file per sync (vega):** the whole sync, error log cards and self-check cards together, is written as a single atomic file in `<hub>/.vega/inbox/`, before the sync state is saved, so a rejected card fails the sync and a retry starts clean. Run `vega_sync`, then `vega_session` afterwards.
+- **Summary & Actionable Guidance:** Returns per-lesson activity, quiz accuracy, prediction accuracy, missed palace stations, new error log entries, reviews due today (legacy fixed steps), the inbox file and card count under `vega`, count of card events left for Vega, and 1-3 concrete suggestions for the next session.
 
 ## today
 
@@ -243,13 +257,14 @@ Each event is a JSON object on a single line:
 - **Session Recipe Budget:** Produces a structured 60- or 30-minute plan following learner profile slots:
   - 30 min: 5m spaced reviews + 25m lesson practice (or 10m Vega + 5m spaced reviews + 15m lesson practice when Vega cards are due).
   - 60 min: 5m spaced reviews + 10m theory & memory anchors + 35m practice + 7m self-check & error log + 3m wrap-up (or 10m Vega + 5m spaced reviews + 10m theory + 25m practice + 7m self-check + 3m wrap-up when Vega cards are due).
-- **Spaced Reviews:** Queries all due error log and lesson review items from `polaris/reviews.json` on or before the target date.
-- **Next Scheduled Lesson:** Identifies the next uncompleted lesson from `polaris/schedule.json` and `course-map.json`, providing direct paths to Aurora slide decks and lesson outline skeletons with practice tasks and DoD.
+- **Spaced Reviews:** Queries the legacy fixed review steps (error log and lesson items) from `polaris/reviews.json` on or before the target date. Steps scheduled earlier stay listed under both review engines; nothing is deleted or migrated.
+- **Next Scheduled Lesson:** Identifies the next uncompleted lesson from `polaris/schedule.json` and `course-map.json` (completions come from `reviews.json` lesson items and from `polaris/progress-state.json`), providing direct paths to Aurora slide decks and lesson outline skeletons with practice tasks and DoD.
 - **Vega FSRS Card Load:**
   - Reads `<hub>/.vega/cards.json` (read-only) if present.
   - Counts non-suspended, non-deleted Vega cards due by the end of today, as well as the count for the current subject when cards carry a matching `subject`.
   - Adds a plan line with the next step `"vega_sync, then vega_session to review"` and budgets 10 minutes in the session recipe.
-  - If `.vega/cards.json` is absent or unreadable, the line is omitted with zero errors.
+  - If `.vega/cards.json` is absent or unreadable, that line is omitted with zero errors (under the `fixed` engine, exactly as before).
+  - Under the `vega` review engine (see `tracking`) the plan adds one more line, `Bộ máy ôn tập: Vega (FSRS lập lịch)`, with the next step `vega_sync, rồi vega_session` (re-solve each card, never reread), and when `cards.json` is missing it says so with `0 thẻ đến hạn`. `polaris_review_due` carries the same Vega due count line.
 - **Dynamic Goal Sync (`write: true`):**
   - Inserts or replaces the `## Today's Dynamic Goal` section in `<hub>/ACTIVE_LEARNING.md`, preserving other hub sections and newline formatting.
 
@@ -274,7 +289,7 @@ Aurora Slides (Interactive Active Learning)
         |
         v
 Polaris (Tracking & Daily Guidance)
-  -> polaris_progress_sync: Ingests progress.jsonl into Sổ lỗi & spaced reviews
+  -> polaris_progress_sync: Ingests progress.jsonl into Sổ lỗi & hands reviews to the review engine (Vega inbox, or fixed D+ steps)
   -> polaris_today: Generates 60m/30m session plan & Today's Dynamic Goal for learning hub
 ```
 
@@ -283,7 +298,7 @@ Polaris (Tracking & Daily Guidance)
 2. **Author:** Aurora decks are created according to outline skeletons, citing facts in `source` and pinning verbatim code.
 3. **Study & Practice:** The learner studies decks via Aurora preview server, answering quizzes, predicting code outputs, and recalling memory palace stations.
 4. **Capture:** Aurora logs events to `<course_dir>/progress.jsonl`.
-5. **Sync:** `polaris_progress_sync` ingests events into `polaris/errorlog.md` and `polaris/reviews.json`.
+5. **Sync:** `polaris_progress_sync` ingests events into `polaris/errorlog.md` and hands the reviews to the review engine: cards in the Vega inbox under `vega` (then `vega_sync` and `vega_session`), or D+ steps in `polaris/reviews.json` under `fixed`.
 6. **Plan Today:** `polaris_today` creates the daily session plan and updates `## Today's Dynamic Goal` in `ACTIVE_LEARNING.md`.
 
 
@@ -303,6 +318,12 @@ Polaris (Tracking & Daily Guidance)
   - *Mnemonic:* Rhythmic or memorable phrases.
 - **Visual Taste:** Apple-keynote aesthetic, no emoji, no neon colors.
 - **Calendar:** Hard commitments (e.g. P0 courses) take absolute priority over P2 self-study tracks.
+- **Review engine (`method.reviewEngine`):** who schedules spaced reviews.
+  - `"vega"`: one adaptive scheduler, Vega (FSRS). Polaris keeps the Sổ lỗi and hands cards to Vega through the inbox `<hub>/.vega/inbox/`; the learner runs `vega_sync`, then `vega_session`. No fixed D+ steps are created.
+  - `"fixed"`: Polaris schedules D+1, D+3, D+7, D+16, D+35 steps (`method.spacedReviewDays`) in `polaris/reviews.json`, exactly as before v0.4.0.
+  - Unset (default): `vega` when `<hub>/.vega/` exists, otherwise `fixed`.
+  - Change it with `polaris_profile { action: "update", patch: { method: { reviewEngine: "fixed" } } }`; `null` removes the override and returns to automatic choice. `polaris_profile get` prints the engine in force (``Bộ máy ôn tập hiệu lực (reviewEngine): ...``), and so does this topic below.
+  - Why one engine: one adaptive scheduler avoids the review debt of several fixed ones (see `tracking` for the evidence).
 
 ## rules
 

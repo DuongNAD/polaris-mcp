@@ -14,7 +14,7 @@ Sister project to [Aurora Slides MCP](https://github.com/DuongNAD/aurora-slides-
 
 1. **The agent reasons, Polaris structures:** Every artifact is strictly validated with Zod schemas and rendered into Markdown or Aurora course inputs. Typos produce actionable, corrective error messages with "did you mean...".
 2. **Evidence first:** Every factual bullet in a roadmap cites verified facts; every fact points to a source plus a precise locator (timestamp `[mm:ss]`, page `[p. N]`, section, line numbers). Labels distinguish primary truth (`course`), extensions (`extension`), and unverified claims (`unverified`).
-3. **Learner fit:** The learner profile drives language (Vietnamese by default with correct diacritics), weekly study slots, blackout periods, session recipes (30m, 60m, 90m lab), study techniques (theory -> memory anchors -> paper notebook -> practice easy-to-hard -> recall walk; predict-then-run for code), and spaced review intervals.
+3. **Learner fit:** The learner profile drives language (Vietnamese by default with correct diacritics), weekly study slots, blackout periods, session recipes (30m, 60m, 90m lab), study techniques (theory -> memory anchors -> paper notebook -> practice easy-to-hard -> recall walk; predict-then-run for code), and the review engine (one adaptive scheduler, Vega FSRS, or the older fixed D+ steps).
 4. **Quality gates:** Automated gates verify brief completeness, source labels and quality scores, fact locators, outcome coverage, dependency DAG cycles, and flag overclaims.
 5. **Files, not databases:** Plain JSON and Markdown inside the subject folder (`polaris/brief.json`, `sources.json`, `facts.json`, `roadmap.json`, `schedule.json`, `course-map.json`, `tasks-map.json`, `reviews.json`, `errorlog.md`, `captures/`, `research/`, `lessons/`). Captured third-party text is kept local and git-ignored.
 
@@ -26,8 +26,10 @@ Sister project to [Aurora Slides MCP](https://github.com/DuongNAD/aurora-slides-
 ├── AGENTS.md                # Global hub rules & agent guidance
 ├── ACTIVE_LEARNING.md       # Priority learning goals, P0 deadlines & checkpoints
 ├── TASKS.md                 # Workspace tasks
-└── .polaris/
-    └── learner.json         # Learner profile (slots, blackouts, recipes, taste, commitments)
+├── .polaris/
+│   └── learner.json         # Learner profile (slots, blackouts, recipes, taste, commitments, method.reviewEngine)
+└── .vega/                   # Vega's personal data (git-ignored); Polaris only drops files into inbox/
+    └── inbox/               # Card candidates from Polaris (contract vega-card-inbox.v1), ingested on vega_sync
 ```
 
 ### Subject Level (`<subject>/`)
@@ -48,8 +50,9 @@ Sister project to [Aurora Slides MCP](https://github.com/DuongNAD/aurora-slides-
     ├── schedule.json        # Deterministic slot schedule, session dates, and when labels
     ├── course-map.json      # Stable module/lesson ID to Aurora lesson mapping
     ├── tasks-map.json       # Synced task ID to hub task mapping (duplicate prevention)
-    ├── reviews.json         # Spaced review tracking schedule (D+1, D+3, D+7, D+16, D+35)
-    ├── errorlog.md          # Learner error log ("Sổ lỗi") with predict-gap reviews
+    ├── reviews.json         # Fixed engine only: Polaris's own D+1, D+3, D+7, D+16, D+35 steps (older steps are kept, never migrated)
+    ├── progress-state.json  # Idempotent sync state (processed events, completed lessons)
+    ├── errorlog.md          # Learner error log ("Sổ lỗi"); under Vega each entry names its Vega card instead of D+ dates
     ├── research/            # Generated research shortlist files (e.g. 2026-10-10-ai-agents.md)
     ├── captures/            # Full-text extractions of web pages, arXiv PDFs, and YouTube transcripts (git-ignored)
     │   ├── S1.md
@@ -61,7 +64,7 @@ Sister project to [Aurora Slides MCP](https://github.com/DuongNAD/aurora-slides-
 
 > **Note on API Cache:** Regenerable search API responses (24h TTL) are stored in the global cache directory (`%LOCALAPPDATA%/polaris/cache` or `POLARIS_CACHE_DIR`), saving space on exFAT drives.
 
-## Tools (v0.3.6)
+## Tools (v0.4.0)
 
 Polaris exposes 20 specialized MCP tools across 5 major functional domains:
 
@@ -69,7 +72,7 @@ Polaris exposes 20 specialized MCP tools across 5 major functional domains:
 | Tool | Description |
 |---|---|
 | `polaris_guide` | Documentation on workflow, pipeline, quality gates, source policy, research engine, schedule, export, tracking, progress sync, today session planning, aurora workflow, and learner method. |
-| `polaris_profile` | Read (`get`) or update (`update`) learner preferences, weekly slots (`slots`), blackout dates (`blackouts`), and session recipes. |
+| `polaris_profile` | Read (`get`) or update (`update`) learner preferences, weekly slots (`slots`), blackout dates (`blackouts`), session recipes, and the review engine `method.reviewEngine` (`vega` or `fixed`; `null` removes the override). `get` ends with the engine in force. |
 | `polaris_start` | Initialize `<subject>/polaris/` and save validated `brief.json` with measurable outcomes and optional `roadmapPath` ("render the roadmap elsewhere so a learner's own ROADMAP.md is never overwritten"). |
 
 ### 2. Research & Sources (with SSRF Guard & Open-Access Fallback)
@@ -101,11 +104,35 @@ All outbound network fetches (web pages, arXiv papers, open-access PDFs, Wikiped
 | Tool | Description |
 |---|---|
 | `polaris_tasks_sync` | Sync scheduled lessons and module checkpoints into `<subject>/TASKS.md` under `## Polaris` in hub format (`- [ ] [Deadline: ...] [Priority: P2] ...`) with duplicate prevention. |
-| `polaris_progress_sync` | Read Aurora Slides interactive learning events from `progress.jsonl` (or exported files), map lessons to modules, add error log entries for wrong quizzes, predict gaps, and missed palace stations, schedule spaced reviews (D+1, D+3, D+7, D+16, D+35) for completed lessons, and skip Vega "card" flashcard events cleanly. Idempotent. |
-| `polaris_errorlog_add` | Record prediction errors and gaps into `polaris/errorlog.md` ("Sổ lỗi") and schedule spaced review iterations. |
-| `polaris_lesson_done` | Record lesson completion in `polaris/reviews.json` and schedule spaced reviews after 1, 3, 7, 16, and 35 days. |
-| `polaris_review_due` | Query lessons and error log items due for review on or before a given date, ordered oldest first. |
-| `polaris_today` | Generate a 60- or 30-minute session plan following learner session recipe (due reviews, Vega FSRS card review load from `<hub>/.vega/cards.json` with next step "vega_sync, then vega_session to review", next scheduled lesson with slide & outline paths, practice tier with DoD). Optionally write or replace `## Today's Dynamic Goal` in `<hub>/ACTIVE_LEARNING.md`. |
+| `polaris_progress_sync` | Read Aurora Slides interactive learning events from `progress.jsonl` (or exported files), map lessons to modules, add error log entries for wrong quizzes, predict gaps, and missed palace stations, and hand the reviews to the review engine: under `vega` one inbox file per sync carries a Vega card per new entry plus the self-check cards of newly completed lessons (nothing is added to `reviews.json`); under `fixed` it schedules D+1, D+3, D+7, D+16, D+35 reviews. Skips Vega "card" flashcard events cleanly. Idempotent. |
+| `polaris_errorlog_add` | Record prediction errors and gaps into `polaris/errorlog.md` ("Sổ lỗi"). Under `vega` the entry's review line names its Vega card (`- **Ôn tập:** thẻ Vega ... (FSRS lập lịch)`) and one card goes to the Vega inbox; under `fixed` it schedules the D+ steps. |
+| `polaris_lesson_done` | Record lesson completion. Under `vega` the lesson's module self-check questions become Vega cards (nothing if the module has none); under `fixed` it records the lesson in `polaris/reviews.json` and schedules reviews after 1, 3, 7, 16, and 35 days. |
+| `polaris_review_due` | Query the legacy fixed review steps in `polaris/reviews.json` due on or before a given date, ordered oldest first. Under `vega` it adds one line with the Vega due count (read-only from `<hub>/.vega/cards.json`) and the next step `vega_sync, rồi vega_session`. |
+| `polaris_today` | Generate a 60- or 30-minute session plan following learner session recipe (due reviews, Vega FSRS card review load from `<hub>/.vega/cards.json` with next step "vega_sync, then vega_session to review" and, under `vega`, the engine line `vega_sync, rồi vega_session`, next scheduled lesson with slide & outline paths, practice tier with DoD). Optionally write or replace `## Today's Dynamic Goal` in `<hub>/ACTIVE_LEARNING.md`. |
+
+## One Review Engine: Vega (v0.4.0)
+
+Spaced reviews are scheduled by **one adaptive engine, Vega (FSRS)**, not by Polaris's own fixed D+1/D+3/D+7/D+16/D+35 steps. Polaris keeps the human-readable error log ("Sổ lỗi") and hands review items to Vega through a shared inbox; the learner then runs `vega_sync` and `vega_session` (Vega MCP).
+
+**Which engine is in force:** `method.reviewEngine` of the learner profile (`"vega"` or `"fixed"`) when set; otherwise `vega` when `<hub>/.vega/` exists; otherwise `fixed`. `polaris_profile get` and `polaris_guide { topic: "learner" }` print the engine in force. Change it with `polaris_profile { action: "update", patch: { method: { reviewEngine: "fixed" } } }` (`null` returns to automatic choice).
+
+| | `vega` | `fixed` |
+|---|---|---|
+| Error log entry (`polaris_errorlog_add`, quiz / predict / recall misses in `polaris_progress_sync`) | Same Markdown entry in `errorlog.md`; the review line reads ``- **Ôn tập:** thẻ Vega `<key>` (FSRS lập lịch)``; one card per entry in the inbox; nothing in `reviews.json` | Exactly as before: D+ line and D+ steps in `reviews.json` |
+| `polaris_lesson_done` | The module's roadmap self-check questions become cards (key `polaris:<subject>:selfcheck:<module id>:<index>`); if there are none, nothing is written and the reply says so | Lesson item with D+ steps in `reviews.json` |
+| `polaris_review_due`, `polaris_today` | Legacy steps already in `reviews.json` are still listed (never deleted or migrated), plus the Vega due count and the next step `vega_sync, rồi vega_session` | As before: the legacy list (and, in `polaris_today`, the 0.3.3 card-load line when `cards.json` exists) |
+
+**Inbox contract `vega-card-inbox.v1`** (shared by Vega, Polaris, Orion, Mira, Constellation): `<hub>/.vega/inbox/`, one new file per tool call named `polaris-<YYYYMMDDTHHmmss>-<6 hex>.jsonl` (UTC), UTF-8, one JSON object per line, written atomically as `.jsonl.tmp` then renamed. Polaris never appends to or rewrites an inbox file and never touches Vega's `cards.json` or `reviews.jsonl`. Every line is validated against the contract before writing (unknown fields rejected); if one line would be invalid nothing is written and the errors are reported. Vega alone validates again, de-duplicates by `key` and schedules with FSRS. Storage note: inbox files are tiny and there is one per tool call, so on a 512 KB-cluster exFAT drive each occupies a whole cluster until Vega ingests it (the contract moves processed files to `inbox/done/`; prune or bundle those from time to time).
+
+| Source | `key` | `front` | `back` | `origin` |
+|---|---|---|---|---|
+| Quiz miss | `polaris:<subject folder>:<entry id>` | the question | correct answer (+ explanation) | `polaris-errorlog`, `errorlog.md`, entry id |
+| Predict miss | same | what to predict (title) | the real output | same |
+| Recall miss | same | `<palace> · <place>: mục nào?` | the item | same |
+| Manual entry | same | the situation to re-solve, from `prediction` / `result` | `why` + `fix` | same |
+| Lesson self-check | `polaris:<subject folder>:selfcheck:<module id>:<index>` (index from 1) | the question | the answer | `polaris-selfcheck`, `roadmap.json`, `<module id> #<index>` |
+
+**Why one adaptive engine:** two schedulers on the same item double the reviews and create review debt, so one adaptive scheduler beats several fixed ones. Expanding versus uniform intervals make no reliable difference (Latimier, Peyre and Ramus 2021, [doi:10.1007/s10648-020-09572-8](https://doi.org/10.1007/s10648-020-09572-8)), so the shape of a fixed ladder is not what buys retention. Personalised review beat one-size-fits-all spacing (Lindsey et al. 2014, [doi:10.1177/0956797613504302](https://doi.org/10.1177/0956797613504302)). Error log reviews should re-solve, never reread (successive relearning, Rawson and Dunlosky 2011, [doi:10.1037/a0023956](https://doi.org/10.1037/a0023956)), which is why every card asks for the situation to be solved again.
 
 ## Polaris + Aurora
 
@@ -128,7 +155,7 @@ flowchart TD
 
   subgraph Polaris_Loop ["3. Polaris: Closed-Loop Tracking"]
     L1["polaris_progress_sync"] --> L2["Error Log ('Sổ lỗi')"]
-    L1 --> L3["Spaced Repetition (D+1, D+3, D+7, D+16, D+35)"]
+    L1 --> L3["Vega inbox cards (FSRS schedules the reviews)"]
     L2 --> L4["polaris_today (Daily Session Plan & Goal)"]
     L3 --> L4
   end
@@ -144,7 +171,7 @@ flowchart TD
 |---|---|
 | **Polaris** (this repo) | Course architect |
 | **[Aurora Slides](https://github.com/DuongNAD/aurora-slides-mcp)** | Lessons, practice, and progress events |
-| **[Vega](https://github.com/DuongNAD/vega-mcp)** | FSRS spaced repetition flashcard memory engine (`<hub>/.vega/cards.json`) |
+| **[Vega](https://github.com/DuongNAD/vega-mcp)** | FSRS spaced repetition flashcard memory engine (`<hub>/.vega/cards.json`); the single review engine, fed by Polaris through `<hub>/.vega/inbox/` |
 | **[SmartDrive-OS](https://github.com/DuongNAD/smart-drive-os)** | SSD governance, learning-aware search over facts/sources/captures, protection of subject folders, post-write index hook |
 | **[Constellation](https://github.com/DuongNAD/constellation-mcp)** | One manifest, registration into Claude Code / Antigravity / Cursor / Codex, health checks, drift doctor, updates |
 
@@ -230,15 +257,15 @@ Every result receives a transparent score (0-100) and evaluation reasons:
 4. **Closed-Loop Progress & Spaced Repetition (`polaris_progress_sync`, `polaris_today`):**
    - `polaris_progress_sync` reads `<course_dir>/progress.jsonl` from Aurora preview server or exported files (supporting Aurora 0.6.1+ optional quiz fields `chosenText`, `answerText`, and `explanation`), while recognizing and cleanly skipping Vega `"card"` flashcard events. The canonical, versioned definition with JSON Schema and fixtures lives in [Constellation's contracts](https://github.com/DuongNAD/constellation-mcp/tree/main/contracts), together with the learning-unit markers, the post-write hook and the source labels; this README summarizes them.
    - Ingests incorrect quiz answers (displaying option texts or indices, explanations, and prompt for root cause), predict-run gaps (displaying predictions, actual output, and reflection prompt), and missed memory palace stations (displaying place, item, and hook prompt) into `polaris/errorlog.md` ("Sổ lỗi").
-   - Schedules spaced repetition reviews at D+1, D+3, D+7, D+16, and D+35 in `polaris/reviews.json`.
-   - `polaris_today` calculates 30m/60m session plans, reads `<hub>/.vega/cards.json` to show Vega cards due by the end of today with the next step `"vega_sync, then vega_session to review"`, budgets 10 minutes in the session recipe when cards are due, and writes `## Today's Dynamic Goal` to the hub's `ACTIVE_LEARNING.md`.
+   - Hands the reviews to the review engine in force (see [One Review Engine](#one-review-engine-vega-v040)): under `vega` one atomic inbox file per sync (`<hub>/.vega/inbox/polaris-<stamp>-<hex>.jsonl`) carries a card per new error log entry and the self-check cards of newly completed lessons, and nothing is added to `polaris/reviews.json`; under `fixed` it schedules spaced repetition reviews at D+1, D+3, D+7, D+16, and D+35 in `polaris/reviews.json`.
+   - `polaris_today` calculates 30m/60m session plans, reads `<hub>/.vega/cards.json` to show Vega cards due by the end of today with the next step `"vega_sync, then vega_session to review"` (under `vega` also `vega_sync, rồi vega_session`), budgets 10 minutes in the session recipe when cards are due, and writes `## Today's Dynamic Goal` to the hub's `ACTIVE_LEARNING.md`.
 
 ## Agent Prompts & Workflow
 
 Polaris provides 4 prompt workflows:
 - **`new_course`**: The full 8-step gated pipeline: Profile -> Brief & Diagnostic -> Research Shortlist -> Facts Extraction -> Roadmap Generation -> Schedule Planning -> Course & Outline Export -> Task Sync -> First Lesson Generation with Aurora.
 - **`next_lesson`**: Daily learning loop: Sync progress -> Plan today's session -> Pick the next scheduled lesson -> Refresh outline -> Build presentation deck with Aurora tools adhering to accuracy and fact citations -> Audit slide deck -> Sync tasks -> Record review.
-- **`review`**: Active recall session: Ingest latest progress events -> Query due spaced reviews -> Guide 5-10 minute active recall session for error log items and lesson summaries.
+- **`review`**: Active recall session: Ingest latest progress events -> Query due reviews (legacy steps and the Vega due count) -> under the `vega` engine run `vega_sync` then `vega_session`, otherwise guide a 5-10 minute active recall session for error log items and lesson summaries.
 - **`research`**: Targeted deep-dive research hunt for a specific module across all keyless providers.
 
 ## MCP Server Connection
@@ -300,13 +327,13 @@ node dist/polaris.mjs export <subject_dir>
 # Sync scheduled lessons into <subject>/TASKS.md
 node dist/polaris.mjs tasks <subject_dir>
 
-# Sync Aurora progress events into error log and spaced reviews
+# Sync Aurora progress events into the error log and hand reviews to the review engine (Vega inbox or fixed D+ steps)
 node dist/polaris.mjs progress <subject_dir> [course_dir]
 
 # Generate daily session plan and print Today's Dynamic Goal
 node dist/polaris.mjs today <subject_dir> [date]
 
-# View guide topics (e.g. overview, pipeline, gates, sources, roadmap, research, schedule, export, tracking, progress, aurora, learner, rules)
+# View guide topics (e.g. overview, pipeline, gates, sources, roadmap, research, schedule, export, tracking, progress, today, aurora, learner, rules)
 node dist/polaris.mjs guide [topic]
 
 # Version & help
@@ -349,6 +376,7 @@ Polaris integrates seamlessly with [SmartDrive-OS](https://github.com/DuongNAD/s
 
 | Version | Description |
 |---|---|
+| **0.4.0** | One review engine: spaced reviews are scheduled by Vega (FSRS) instead of Polaris's fixed D+1/D+3/D+7/D+16/D+35 steps. New profile field `method.reviewEngine` (`vega` or `fixed`; unset = `vega` when `<hub>/.vega/` exists, else `fixed`), shown by `polaris_profile get` and guide topic `learner`. Under `vega`, `polaris_errorlog_add` and the quiz/predict/recall entries of `polaris_progress_sync` still append the same Markdown entry to `errorlog.md` but its review line becomes `- **Ôn tập:** thẻ Vega ... (FSRS lập lịch)`, nothing is added to `reviews.json`, and one card per entry goes to the Vega inbox `<hub>/.vega/inbox/` (contract `vega-card-inbox.v1`, one atomic file per tool call, producer `polaris`, validated before writing); `polaris_lesson_done` sends the lesson's module self-check questions as cards instead of fixed lesson reviews; `polaris_review_due` and `polaris_today` still list legacy steps and add the Vega due count with the next step `vega_sync, rồi vega_session`. Under `fixed` the behaviour is unchanged. New modules `inbox.ts`, `engine.ts`, `cards.ts`; guide topics `tracking`, `progress`, `today`, `learner`, `overview` updated. |
 | **0.3.6** | Optional Semantic Scholar API key support (`SEMANTIC_SCHOLAR_API_KEY`, alias `S2_API_KEY`) configured in the polaris server's `"env"` block of MCP configs (request key at https://www.semanticscholar.org/product/api; never committed in repos; keyless remains default); conservative >= 1100 ms rate-limiting with `POLARIS_S2_MIN_INTERVAL_MS` override (min 1000 ms); credential header stripping (`authorization`, `proxy-authorization`, `x-api-key`, `cookie`) case-insensitively across Headers objects, arrays, and plain objects on cross-origin redirects in `fetchSafeHop`; zero credential leakage in errors, logs, cache keys, captures, or tool output; `POLARIS_S2_URL` test base URL override. |
 | **0.3.5** | Polaris dogfood fixes: Intelligent facts gate false-positive exemptions for mathematical notation (exponents/indices `R^2`, `x^2`, `O(d^3)`, `O(n log n)`, `w_1`, `L1/L2`, `l1/l2`), dimensions (`1D/2D/3D`, `n×d`), structural markers (`bước 1`, `slide 3`, `M1/M2.1`, `F12/S3` IDs, locators), LaTeX inside `$...$`, and inline code, while strictly flagging empirical quantities (percentages, measurements, dates, statistics); prefers known open-access copies (`oaUrl`) first while keeping original publisher link; interstitial bot-wall detection (< 1500 chars with strong challenge markers) preventing false positives on normal articles; unified HTML/PDF open-access capture engine; robots.txt validation on open-access URLs; automatic Open-Access fallback via OpenAlex and Unpaywall when publisher URLs return 401/403/429/bot-wall (recording both original and `oaUrl` with notes and keeping SSRF guard on every hop); documented brief `roadmapPath` ("render the roadmap elsewhere so a learner's own ROADMAP.md is never overwritten"). |
 | **0.3.4** | SSRF Security Guard: Block Server-Side Request Forgery in source capture and research fetches. Outbound requests strictly allow http/https only, resolve hosts via DNS (`node:dns`), refuse loopback (127/8, ::1), unspecified (0.0.0.0, ::), private LANs (10/8, 172.16/12, 192.168/16, fc00::/7), link-local/cloud metadata (169.254/16, fe80::/10), CGNAT (100.64/10), multicast, reserved ranges, IPv4-mapped IPv6, and localhost/*.localhost. Follow redirects manually (max 5 hops) with re-validation on every hop. Opt-in `POLARIS_ALLOW_PRIVATE_URLS=1` for deliberate local testing. |

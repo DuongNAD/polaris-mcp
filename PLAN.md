@@ -27,8 +27,9 @@ Vietnamese developer and self-learner. Method: theory -> memory anchors (memory 
 anchors, analogy, mnemonic) -> copy 4-8 key lines into a paper notebook -> practice from easy to hard -> recall walk;
 predict-then-run for code (write the prediction, run, compare; the gap goes into an error log, "Sổ lỗi"). Big subjects
 become courses of small lessons (15-25 minutes, each with its own look). Sessions: 30 min (5 review + one small task),
-60 min (5 review, 10 video/docs, 35 practice, 7 self-check, 3 next step), labs 90 min. Spaced review after 1, 3, 7, 16,
-35 days. Taste: Apple-keynote slides, no emoji, no neon. Hard commitments (e.g. a P0 course) take priority in the
+60 min (5 review, 10 video/docs, 35 practice, 7 self-check, 3 next step), labs 90 min. Spaced review is scheduled by one
+adaptive engine, Vega (FSRS), fed through the Vega inbox (v0.4.0); Polaris's own fixed steps after 1, 3, 7, 16, 35 days
+remain as the `fixed` engine (`method.reviewEngine`). Taste: Apple-keynote slides, no emoji, no neon. Hard commitments (e.g. a P0 course) take priority in the
 calendar. Gold standard of the roadmap format: `D:/02_Learning_Knowledge/AMD_AI_Academy_AI_Agents_101/04_Roadmaps/ROADMAP.md`.
 
 ## Learning hub layout (existing)
@@ -40,7 +41,8 @@ checkpoints, deadlines), `TASKS.md` (workspace tasks), `pick_today.py`, one fold
 Never scan D: recursively (find, grep -r, dir /s, Get-ChildItem -Recurse); local search goes through the smart-drive MCP.
 
 ## Data
-Hub level: `<hub>/.polaris/learner.json` (hub = `POLARIS_HUB`, default `D:/02_Learning_Knowledge`).
+Hub level: `<hub>/.polaris/learner.json` (hub = `POLARIS_HUB`, default `D:/02_Learning_Knowledge`); `<hub>/.vega/inbox/`
+receives card candidates for Vega (contract `vega-card-inbox.v1`, v0.4.0).
 Subject level, in `<subject>/polaris/`:
 
 | File | Content |
@@ -52,7 +54,7 @@ Subject level, in `<subject>/polaris/`:
 | `schedule.json` | weeks `[{week, from, to, sessions: [{date, minutes, module, activity}]}]`, lesson `when` labels |
 | `lessons/<dir>.outline.md` | lesson outline for review before the deck is built |
 | `captures/<id>.md` | captured text of a source with URL and date (git-ignored) |
-| `errorlog.md`, `reviews.json` | "Sổ lỗi" entries and spaced-review dates |
+| `errorlog.md`, `reviews.json` | "Sổ lỗi" entries; `reviews.json` holds fixed spaced-review dates only under the `fixed` engine (older steps are kept, never migrated) |
 
 The rendered roadmap goes to `<subject>/04_Roadmaps/ROADMAP.md` by default (configurable in the brief).
 
@@ -173,3 +175,4 @@ pirated copies), captures stay git-ignored and are only for personal study.
 - 2026-10-11: v0.3.4 built and released: Block server-side request forgery (SSRF) in source capture and research fetches. Outbound requests strictly allow http/https only, resolve hosts via DNS (node:dns with all addresses), refuse loopback (127/8, ::1), unspecified (0.0.0.0, ::), private LANs (10/8, 172.16/12, 192.168/16, fc00::/7), link-local/cloud metadata (169.254/16, fe80::/10), CGNAT (100.64/10), multicast, reserved ranges, IPv4-mapped IPv6, and localhost/*.localhost. Follow redirects manually (max 5 hops) with re-validation on every hop. Added POLARIS_ALLOW_PRIVATE_URLS=1 opt-in for deliberate local use and e2e fixture server.
 - 2026-10-11: v0.3.5 built and released: Resolved findings from Machine Learning dogfood report. (1) Facts gate false-positive exemptions for mathematical notation (exponents/indices R^2, x^2, O(d^3), O(n log n), w_1, L1/L2), dimensions (1D/2D/3D, n×d), structural markers (bước 1, slide 3, M1/M2.1, F12/S3 IDs, locators), LaTeX $...$, and inline code, while strictly enforcing crossCheck for empirical quantities (50 TOPS, 92%, 2023, 22.22x). (2) Open-Access fallback in capture for 401/403/429 or bot walls via OpenAlex (best_oa_location / open_access.oa_url) and Unpaywall with SSRF guards and dual URL recording. (3) Documented brief `roadmapPath` ("render the roadmap elsewhere so a learner's own ROADMAP.md is never overwritten") in guide, README, and README.vi. (4) Comprehensive e2e unit & integration tests passing.
 - 2026-10-11: v0.3.6 built and released: Optional Semantic Scholar API key support (`SEMANTIC_SCHOLAR_API_KEY`, alias `S2_API_KEY`) configured in the polaris server's `"env"` block (request at https://www.semanticscholar.org/product/api, never committed in repos; keyless stays default); conservative >= 1100 ms rate-limiting with `POLARIS_S2_MIN_INTERVAL_MS` override (min 1000 ms); credential header stripping (`authorization`, `proxy-authorization`, `x-api-key`, `cookie`) case-insensitively for Headers objects, arrays, and plain objects on cross-origin redirects in `fetchSafeHop`; `POLARIS_S2_URL` test base URL override; zero key leakage in errors, logs, cache keys, captures, or tool output; e2e tests passing.
+- 2026-10-12: v0.4.0 built and released: one review engine. Spaced reviews are scheduled by Vega (FSRS) instead of Polaris's fixed D+1/D+3/D+7/D+16/D+35 steps; Polaris keeps the human-readable error log ("Sổ lỗi") and hands review items to Vega through the shared inbox `<hub>/.vega/inbox/` (contract `vega-card-inbox.v1`: one atomic file `polaris-<UTC stamp>-<6 hex>.jsonl` per tool call, every line validated before writing, Vega's `cards.json` and `reviews.jsonl` never touched). Profile field `method.reviewEngine` (`vega` or `fixed`; unset = `vega` when `<hub>/.vega/` exists, else `fixed`; `null` clears it) shown by `polaris_profile get` and guide topic `learner`. Engine `vega`: `polaris_errorlog_add` and the quiz/predict/recall entries of `polaris_progress_sync` still append the same Markdown entry to `errorlog.md` but the review line becomes `- **Ôn tập:** thẻ Vega <key> (FSRS lập lịch)` and nothing is added to `reviews.json`; keys `polaris:<subject folder>:<entry id>`; `polaris_lesson_done` sends the lesson's module self-check questions as cards (`polaris:<subject>:selfcheck:<module id>:<index>`), nothing when the module has none, and records the completion in `progress-state.json`; `polaris_review_due` and `polaris_today` still list legacy fixed steps and add the Vega due count with the next step `vega_sync, rồi vega_session`. Engine `fixed`: unchanged (the pre-existing e2e checks pass with only the version string updated, and a side-by-side run against the committed 0.3.6 bundle gave identical `errorlog.md`, `reviews.json`, `progress-state.json` and tool summaries). New modules `inbox.ts` (contract validator and atomic writer), `engine.ts`, `cards.ts`; guide topics `tracking`, `progress`, `today`, `learner`, `overview` updated with the evidence (Latimier et al. 2021; Lindsey et al. 2014; Rawson and Dunlosky 2011); e2e extended with the Vega inbox suite.

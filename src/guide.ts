@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { describeReviewEngine, resolveReviewEngine } from "./engine.js";
 import { PKG_ROOT } from "./util.js";
 
 export const TOPICS = ["overview", "pipeline", "brief", "gates", "sources", "capture", "roadmap", "research", "schedule", "export", "tracking", "progress", "today", "aurora", "learner", "rules"] as const;
@@ -42,7 +43,8 @@ async function loadSections(): Promise<Map<string, string>> {
   return sections;
 }
 
-export async function guideText(topic?: string): Promise<string> {
+/** `hub` only matters for the `learner` topic, which ends with the review engine in force for that hub. */
+export async function guideText(topic?: string, hub?: string): Promise<string> {
   const s = await loadSections();
   if (!topic || topic === "overview") {
     const ov = s.get("overview") ?? "";
@@ -57,6 +59,10 @@ export async function guideText(topic?: string): Promise<string> {
 
   const found = s.get(topic.toLowerCase());
   if (found) {
+    if (topic.toLowerCase() === "learner") {
+      const info = await resolveReviewEngine(hub);
+      return `${found}\n\nCurrent setting for this hub: ${describeReviewEngine(info)}`;
+    }
     return found;
   }
 

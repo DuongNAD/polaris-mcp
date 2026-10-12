@@ -1,22 +1,25 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { resolveReviewEngine } from "./engine.js";
 import {
   ProgressEventSchema,
+  emptyProgressState,
   validateProgressState,
   type CourseMap,
   type ProgressEvent,
   type ProgressState,
-  type Roadmap,
+  type ReviewEngine,
 } from "./schema.js";
 import { readBrief, readRoadmap } from "./store.js";
 import {
-  addErrorLogEntry,
+  ReviewBatch,
   addPredictErrorLogEntry,
   addQuizErrorLogEntry,
   addRecallErrorLogEntry,
   getDueReviews,
   markLessonDone,
+  type BatchCommitResult,
 } from "./tracking.js";
 import { notifySmartDrive } from "./smartdrive.js";
 import {
@@ -47,6 +50,11 @@ export interface ProgressSyncResult {
   newErrorLogEntries: Array<{ id: string; why: string; fix: string }>;
   lessonsCompleted: string[];
   reviewsDueToday: number;
+  /** Effective review engine for this sync (see engine.ts). */
+  reviewEngine: ReviewEngine;
+  /** Vega engine: cards written to the inbox by this sync (one file) and the file's path. */
+  inboxCards?: number;
+  inboxFile?: string;
   summary: string;
 }
 
@@ -122,23 +130,12 @@ export async function syncProgress(options: ProgressSyncOptions): Promise<Progre
   // Load progress state for idempotency
   let state = await readJson<ProgressState>(p.progressStateJson);
   if (!state || !validateProgressState(state).ok) {
-    state = {
-      updated: todayIso(),
-      processedHashes: [],
-      dedupKeys: [],
-      lastSyncedFiles: [],
-      stats: {
-        totalEvents: 0,
-        quizTotal: 0,
-        quizCorrect: 0,
-        predictRight: 0,
-        predictDifferent: 0,
-        recallGot: 0,
-        recallMissed: 0,
-        lessonsCompleted: [],
-      },
-    };
+    state = emptyProgressState(todayIso());
   }
+
+  // Review engine: under Vega, error-log entries and lesson self-checks become cards in one inbox file for this sync.
+  const engine = await resolveReviewEngine(options.hub);
+  const batch = engine.engine === "vega" ? new ReviewBatch(engine) : undefined;
 
   const processedHashes = new Set<string>(state.processedHashes ?? []);
   const dedupKeys = new Set<string>(state.dedupKeys ?? []);
@@ -261,6 +258,7 @@ export async function syncProgress(options: ProgressSyncOptions): Promise<Progre
               event,
               modId,
               options.hub,
+              batch,
             );
             const answerDisplay =
               event.answerText && event.answerText.length > 0
@@ -287,6 +285,7 @@ export async function syncProgress(options: ProgressSyncOptions): Promise<Progre
               event,
               modId,
               options.hub,
+              batch,
             );
             newErrorLogEntries.push({
               id: errRes.entryId,
@@ -316,6 +315,7 @@ export async function syncProgress(options: ProgressSyncOptions): Promise<Progre
               event,
               modId,
               options.hub,
+              batch,
             );
             newErrorLogEntries.push({
               id: errRes.entryId,
@@ -330,10 +330,17 @@ export async function syncProgress(options: ProgressSyncOptions): Promise<Progre
           completedLessonsSet.add(event.lesson);
           newlyCompletedLessons.push(event.lesson);
           const score = event.quiz ? `Quiz: ${event.quiz}` : event.predictions ? `Predict: ${event.predictions}` : undefined;
-          await markLessonDone(subject_dir, event.lesson, eventDate, score, options.hub);
+          await markLessonDone(subject_dir, event.lesson, eventDate, score, options.hub, batch);
         }
       }
     }
+  }
+
+  // Vega engine: hand every card of this sync over in one atomic inbox file (inbox first, then the Markdown entries).
+  // This runs before the state is saved, so a rejected card fails the whole sync and a retry starts clean.
+  let commit: BatchCommitResult | undefined;
+  if (batch) {
+    commit = await batch.commit();
   }
 
   // Update aggregated stats
@@ -388,12 +395,16 @@ export async function syncProgress(options: ProgressSyncOptions): Promise<Progre
   }
   if (newErrorLogEntries.length > 0) {
     suggestions.push(
-      `${suggestions.length + 1}. Ôn tập ${newErrorLogEntries.length} mục mới ghi vào Sổ lỗi (che phần nguyên nhân và tự giải thích lại).`,
+      batch
+        ? `${suggestions.length + 1}. Giải lại ${newErrorLogEntries.length} thẻ mới từ Sổ lỗi bằng Vega: vega_sync, rồi vega_session (giải lại từng thẻ, không đọc lại).`
+        : `${suggestions.length + 1}. Ôn tập ${newErrorLogEntries.length} mục mới ghi vào Sổ lỗi (che phần nguyên nhân và tự giải thích lại).`,
     );
   }
   if (newlyCompletedLessons.length > 0) {
     suggestions.push(
-      `${suggestions.length + 1}. Bài học "${newlyCompletedLessons.join(", ")}" đã hoàn thành và lên lịch ôn D+1..D+35; chuẩn bị bài tiếp theo theo lộ trình.`,
+      batch
+        ? `${suggestions.length + 1}. Bài học "${newlyCompletedLessons.join(", ")}" đã hoàn thành; thẻ tự kiểm tra đã gửi cho Vega (FSRS lập lịch); chuẩn bị bài tiếp theo theo lộ trình.`
+        : `${suggestions.length + 1}. Bài học "${newlyCompletedLessons.join(", ")}" đã hoàn thành và lên lịch ôn D+1..D+35; chuẩn bị bài tiếp theo theo lộ trình.`,
     );
   }
   if (suggestions.length === 0 && due.dueCount > 0) {
@@ -440,8 +451,21 @@ export async function syncProgress(options: ProgressSyncOptions): Promise<Progre
     "",
     `Mục mới thêm vào Sổ lỗi: ${newErrorLogEntries.length}`,
     `Bài học hoàn thành mới: ${newlyCompletedLessons.length}`,
-    `Ôn tập đến hạn hôm nay: ${due.dueCount} mục`,
+    batch
+      ? `Ôn tập mốc cố định (cũ, reviews.json) đến hạn hôm nay: ${due.dueCount} mục`
+      : `Ôn tập đến hạn hôm nay: ${due.dueCount} mục`,
   );
+
+  if (commit) {
+    if (commit.cards > 0 && commit.file) {
+      lines.push(
+        `Hộp thư Vega: đã gửi ${commit.cards} thẻ vào ${commit.file} (Vega lập lịch FSRS; không thêm mục nào vào reviews.json).`,
+        "Bước tiếp theo: vega_sync, rồi vega_session.",
+      );
+    } else {
+      lines.push("Hộp thư Vega: không có thẻ mới trong lần đồng bộ này.");
+    }
+  }
 
   if (newErrorLogEntries.length > 0) {
     lines.push("", "Chi tiết mục Sổ lỗi mới:");
@@ -479,6 +503,9 @@ export async function syncProgress(options: ProgressSyncOptions): Promise<Progre
     newErrorLogEntries,
     lessonsCompleted: Array.from(completedLessonsSet),
     reviewsDueToday: due.dueCount,
+    reviewEngine: engine.engine,
+    inboxCards: commit?.cards,
+    inboxFile: commit?.file,
     summary: lines.join("\n"),
   };
 }

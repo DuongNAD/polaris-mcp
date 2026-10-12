@@ -14,7 +14,7 @@ Dự án song hành cùng [Aurora Slides MCP](https://github.com/DuongNAD/aurora
 
 1. **Agent tư duy, Polaris định hình cấu trúc:** Mọi dữ liệu đều là JSON được kiểm thực chặt chẽ qua Zod schema và xuất ra Markdown hoặc định dạng đầu vào cho Aurora. Lỗi nhập liệu đi kèm gợi ý sửa đổi chính xác ("có phải ý bạn là...").
 2. **Dựa trên bằng chứng (Evidence first):** Mọi ý kiến thức cốt lõi đều dẫn chiếu đến facts; mỗi fact đều trỏ về một source kèm định vị cụ thể (mốc thời gian video `[mm:ss]`, số trang `[p. N]`, mục, khoảng dòng). Nhãn phân loại rõ ràng: **[Khóa học]** (nguồn sự thật chính thức), **[Mở rộng]** (nguồn bên ngoài đã xác minh), **(chưa xác minh)** (chưa kiểm chứng).
-3. **Phù hợp với người học:** Hồ sơ người học (Learner Profile) quy định ngôn ngữ (tiếng Việt chuẩn dấu), khung giờ học trong tuần (`slots`), ngày bận (`blackouts`), công thức buổi học (30 phút, 60 phút, lab 90 phút), phương pháp tiếp thu (lý thuyết -> neo ghi nhớ -> sổ tay giấy -> thực hành từ dễ đến khó -> đi dạo gợi nhớ; predict-then-run đối với code), và chu kỳ ôn tập ngắt quãng (1, 3, 7, 16, 35 ngày).
+3. **Phù hợp với người học:** Hồ sơ người học (Learner Profile) quy định ngôn ngữ (tiếng Việt chuẩn dấu), khung giờ học trong tuần (`slots`), ngày bận (`blackouts`), công thức buổi học (30 phút, 60 phút, lab 90 phút), phương pháp tiếp thu (lý thuyết -> neo ghi nhớ -> sổ tay giấy -> thực hành từ dễ đến khó -> đi dạo gợi nhớ; predict-then-run đối với code), và bộ máy ôn tập (một bộ lập lịch thích nghi duy nhất là Vega FSRS, hoặc các mốc D+ cố định cũ).
 4. **Rào chắn chất lượng (Quality gates):** Kiểm tra tự động tính đầy đủ của brief, nhãn và điểm chất lượng nguồn, định vị fact, độ phủ đầu ra, đồ thị phụ thuộc module không vòng lặp (DAG), và cảnh báo các khẳng định quá mức.
 5. **Tập tin thuần, không dùng cơ sở dữ liệu phức tạp:** Lưu trữ JSON và Markdown trực tiếp trong thư mục môn học (`polaris/brief.json`, `sources.json`, `facts.json`, `roadmap.json`, `schedule.json`, `course-map.json`, `tasks-map.json`, `reviews.json`, `errorlog.md`, `captures/`, `research/`, `lessons/`). Bản chụp văn bản và cache được giữ cục bộ và bỏ qua trong git (`.gitignore`).
 
@@ -26,8 +26,10 @@ Dự án song hành cùng [Aurora Slides MCP](https://github.com/DuongNAD/aurora
 ├── AGENTS.md                # Quy tắc chung của hub và hướng dẫn cho AI agent
 ├── ACTIVE_LEARNING.md       # Mục tiêu ưu tiên, hạn chót P0 và các checkpoint
 ├── TASKS.md                 # Quản lý tác vụ toàn hub
-└── .polaris/
-    └── learner.json         # Hồ sơ người học (khung giờ, ngày bận, công thức buổi học, phong cách)
+├── .polaris/
+│   └── learner.json         # Hồ sơ người học (khung giờ, ngày bận, công thức buổi học, phong cách, method.reviewEngine)
+└── .vega/                   # Dữ liệu cá nhân của Vega (git-ignored); Polaris chỉ thả file vào inbox/
+    └── inbox/               # Thẻ ứng viên từ Polaris (hợp đồng vega-card-inbox.v1), Vega nhập khi chạy vega_sync
 ```
 
 ### Cấp độ môn học (`<subject>/`)
@@ -48,8 +50,9 @@ Dự án song hành cùng [Aurora Slides MCP](https://github.com/DuongNAD/aurora
     ├── schedule.json        # Lịch học xác định theo slot, ngày học và nhãn when
     ├── course-map.json      # Bản đồ ánh xạ ổn định giữa module/bài học và Aurora lesson
     ├── tasks-map.json       # Bản đồ ánh xạ task ID với TASKS.md (chống trùng lặp)
-    ├── reviews.json         # Lịch ôn tập ngắt quãng (D+1, D+3, D+7, D+16, D+35)
-    ├── errorlog.md          # Sổ lỗi người học với chu kỳ ôn tập các khoảng cách dự đoán
+    ├── reviews.json         # Chỉ bộ máy fixed: các mốc D+1, D+3, D+7, D+16, D+35 của chính Polaris (mốc cũ được giữ nguyên, không chuyển đổi)
+    ├── progress-state.json  # Trạng thái đồng bộ lũy đẳng (sự kiện đã xử lý, bài học đã hoàn thành)
+    ├── errorlog.md          # Sổ lỗi người học; với Vega, mỗi mục ghi tên thẻ Vega thay vì các mốc D+
     ├── research/            # Các file danh sách rút gọn tài liệu (vd: 2026-10-10-ai-agents.md)
     ├── captures/            # Bản trích xuất toàn văn từ web/arXiv/YouTube (git-ignored)
     │   ├── S1.md
@@ -61,7 +64,7 @@ Dự án song hành cùng [Aurora Slides MCP](https://github.com/DuongNAD/aurora
 
 > **Ghi chú về Cache API:** Toàn bộ dữ liệu bộ nhớ đệm tìm kiếm API 24 giờ được lưu tập trung tại cache hệ thống (`%LOCALAPPDATA%/polaris/cache` hoặc `POLARIS_CACHE_DIR`), giúp tiết kiệm dung lượng cụm đĩa exFAT.
 
-## Danh sách công cụ (v0.3.6)
+## Danh sách công cụ (v0.4.0)
 
 Polaris cung cấp 20 công cụ MCP chia theo 5 nhóm chức năng:
 
@@ -69,7 +72,7 @@ Polaris cung cấp 20 công cụ MCP chia theo 5 nhóm chức năng:
 | Công cụ | Mô tả |
 |---|---|
 | `polaris_guide` | Tra cứu tài liệu hướng dẫn quy trình, rào chắn chất lượng, chính sách nguồn, công cụ nghiên cứu, lập lịch, xuất slide, theo dõi, đồng bộ tiến độ Aurora, kế hoạch ngày, quy trình tích hợp và phương pháp học. |
-| `polaris_profile` | Đọc (`get`) hoặc cập nhật (`update`) hồ sơ người học, khung giờ tuần (`slots`), ngày bận (`blackouts`) và công thức buổi học. |
+| `polaris_profile` | Đọc (`get`) hoặc cập nhật (`update`) hồ sơ người học, khung giờ tuần (`slots`), ngày bận (`blackouts`), công thức buổi học và bộ máy ôn tập `method.reviewEngine` (`vega` hoặc `fixed`; `null` để bỏ ghi đè). Kết quả `get` kết thúc bằng bộ máy đang có hiệu lực. |
 | `polaris_start` | Khởi tạo thư mục môn học, thiết lập `polaris/brief.json` và cấu hình `.gitignore`, hỗ trợ trường `roadmapPath` ("kết xuất lộ trình ra vị trí tùy biến để không bao giờ ghi đè lên file ROADMAP.md của người học"). |
 
 ### 2. Nghiên cứu & Nguồn tài liệu (kèm Rào chắn SSRF & Fallback Open Access)
@@ -101,11 +104,35 @@ Toàn bộ các yêu cầu mạng ra ngoài (trang web, arXiv, PDF Open Access, 
 | Công cụ | Mô tả |
 |---|---|
 | `polaris_tasks_sync` | Đồng bộ các bài học và checkpoint vào `<subject>/TASKS.md` dưới mục `## Polaris` theo định dạng chuẩn hub (`- [ ] [Deadline: ...] [Priority: P2] ...`) và chống trùng lặp. |
-| `polaris_progress_sync` | Đọc các sự kiện học tập tương tác từ file `progress.jsonl` của Aurora Slides (hoặc file xuất), tự động đưa lỗi quiz, lệch dự đoán (predict gaps) và trạm trí nhớ bị quên vào Sổ lỗi, lập lịch ôn tập ngắt quãng (D+1, D+3, D+7, D+16, D+35) cho bài học hoàn thành, và nhận diện bỏ qua các sự kiện flashcard "card" của Vega. Hoàn toàn lũy đẳng (idempotent). |
-| `polaris_errorlog_add` | Ghi nhận lỗi dự đoán và khoảng cách hiểu vào `polaris/errorlog.md` ("Sổ lỗi") và lập lịch các mốc ôn tập. |
-| `polaris_lesson_done` | Đánh dấu hoàn thành bài học trong `polaris/reviews.json` và lập lịch ôn tập ngắt quãng sau 1, 3, 7, 16 và 35 ngày. |
-| `polaris_review_due` | Truy vấn danh sách bài học và mục sổ lỗi đến hạn ôn tập trước hoặc vào ngày chỉ định, sắp xếp cũ nhất lên trước. |
-| `polaris_today` | Lập kế hoạch buổi học 60 hoặc 30 phút theo công thức học tập (mục ôn tập đến hạn, số lượng thẻ Vega FSRS đến hạn từ `<hub>/.vega/cards.json` kèm bước tiếp theo "vega_sync, then vega_session to review", bài học tiếp theo theo lịch kèm đường dẫn slide và outline, tầng thực hành kèm DoD). Tùy chọn ghi/thay thế khối `## Today's Dynamic Goal` vào file `ACTIVE_LEARNING.md` của Hub. |
+| `polaris_progress_sync` | Đọc các sự kiện học tập tương tác từ file `progress.jsonl` của Aurora Slides (hoặc file xuất), tự động đưa lỗi quiz, lệch dự đoán (predict gaps) và trạm trí nhớ bị quên vào Sổ lỗi, rồi giao việc ôn tập cho bộ máy đang có hiệu lực: với `vega`, mỗi lần đồng bộ ghi đúng một file hộp thư mang một thẻ Vega cho mỗi mục mới cùng các thẻ tự kiểm tra của bài học vừa hoàn thành (không thêm gì vào `reviews.json`); với `fixed`, lập lịch ôn D+1, D+3, D+7, D+16, D+35. Nhận diện bỏ qua các sự kiện flashcard "card" của Vega. Hoàn toàn lũy đẳng (idempotent). |
+| `polaris_errorlog_add` | Ghi nhận lỗi dự đoán và khoảng cách hiểu vào `polaris/errorlog.md` ("Sổ lỗi"). Với `vega`, dòng ôn tập của mục ghi tên thẻ Vega (`- **Ôn tập:** thẻ Vega ... (FSRS lập lịch)`) và một thẻ được gửi vào hộp thư Vega; với `fixed`, lập lịch các mốc D+. |
+| `polaris_lesson_done` | Đánh dấu hoàn thành bài học. Với `vega`, các câu tự kiểm tra của module chứa bài học trở thành thẻ Vega (không có thì không ghi gì); với `fixed`, ghi bài học vào `polaris/reviews.json` và lập lịch ôn sau 1, 3, 7, 16 và 35 ngày. |
+| `polaris_review_due` | Truy vấn các mốc ôn cố định cũ trong `polaris/reviews.json` đến hạn trước hoặc vào ngày chỉ định, sắp xếp cũ nhất lên trước. Với `vega`, thêm một dòng số thẻ Vega đến hạn (đọc `<hub>/.vega/cards.json`, chỉ đọc) kèm bước tiếp theo `vega_sync, rồi vega_session`. |
+| `polaris_today` | Lập kế hoạch buổi học 60 hoặc 30 phút theo công thức học tập (mục ôn tập đến hạn, số lượng thẻ Vega FSRS đến hạn từ `<hub>/.vega/cards.json` kèm bước tiếp theo "vega_sync, then vega_session to review" và, với `vega`, dòng bộ máy `vega_sync, rồi vega_session`, bài học tiếp theo theo lịch kèm đường dẫn slide và outline, tầng thực hành kèm DoD). Tùy chọn ghi/thay thế khối `## Today's Dynamic Goal` vào file `ACTIVE_LEARNING.md` của Hub. |
+
+## Một bộ máy ôn tập: Vega (v0.4.0)
+
+Việc ôn tập ngắt quãng do **một bộ máy thích nghi duy nhất, Vega (FSRS)**, lập lịch; Polaris không còn tự đặt các mốc cố định D+1/D+3/D+7/D+16/D+35. Polaris giữ Sổ lỗi dễ đọc cho người và giao các mục cần ôn cho Vega qua một hộp thư dùng chung; sau đó người học chạy `vega_sync` rồi `vega_session` (Vega MCP).
+
+**Bộ máy nào có hiệu lực:** `method.reviewEngine` trong hồ sơ người học (`"vega"` hoặc `"fixed"`) nếu đã đặt; nếu chưa đặt thì là `vega` khi thư mục `<hub>/.vega/` tồn tại, ngược lại là `fixed`. `polaris_profile get` và `polaris_guide { topic: "learner" }` in ra bộ máy đang có hiệu lực. Đổi bằng `polaris_profile { action: "update", patch: { method: { reviewEngine: "fixed" } } }` (`null` để quay về tự chọn).
+
+| | `vega` | `fixed` |
+|---|---|---|
+| Mục Sổ lỗi (`polaris_errorlog_add`, lỗi quiz / predict / recall trong `polaris_progress_sync`) | Vẫn ghi đúng mục Markdown vào `errorlog.md`; dòng ôn tập thành ``- **Ôn tập:** thẻ Vega `<key>` (FSRS lập lịch)``; mỗi mục một thẻ trong hộp thư; không thêm gì vào `reviews.json` | Y như trước: dòng D+ và các mốc D+ trong `reviews.json` |
+| `polaris_lesson_done` | Các câu tự kiểm tra của module trong roadmap thành thẻ (key `polaris:<subject>:selfcheck:<module id>:<index>`); không có câu nào thì không ghi gì và thông báo rõ | Mục bài học kèm các mốc D+ trong `reviews.json` |
+| `polaris_review_due`, `polaris_today` | Vẫn liệt kê các mốc cũ đã có trong `reviews.json` (không xóa, không chuyển đổi), thêm số thẻ Vega đến hạn và bước tiếp theo `vega_sync, rồi vega_session` | Y như trước: danh sách cũ (và, trong `polaris_today`, dòng số thẻ của bản 0.3.3 khi có `cards.json`) |
+
+**Hợp đồng hộp thư `vega-card-inbox.v1`** (dùng chung bởi Vega, Polaris, Orion, Mira, Constellation): thư mục `<hub>/.vega/inbox/`, mỗi lần gọi công cụ ghi một file mới tên `polaris-<YYYYMMDDTHHmmss>-<6 hex>.jsonl` (giờ UTC), UTF-8, mỗi dòng một đối tượng JSON, ghi nguyên tử bằng `.jsonl.tmp` rồi đổi tên. Polaris không bao giờ ghi nối thêm hay ghi đè file hộp thư và không bao giờ chạm vào `cards.json` hay `reviews.jsonl` của Vega. Mỗi dòng được kiểm tra theo hợp đồng trước khi ghi (từ chối trường lạ); nếu một dòng không hợp lệ thì không ghi gì và báo lỗi. Chỉ Vega kiểm tra lại, chống trùng theo `key` và lập lịch bằng FSRS. Lưu ý dung lượng: file hộp thư rất nhỏ và mỗi lần gọi công cụ có một file, nên trên ổ exFAT cụm 512 KB mỗi file chiếm trọn một cụm cho đến khi Vega nhập (hợp đồng chuyển file đã xử lý sang `inbox/done/`; nên dọn hoặc gộp thư mục đó định kỳ).
+
+| Nguồn | `key` | `front` | `back` | `origin` |
+|---|---|---|---|---|
+| Sai quiz | `polaris:<thư mục môn>:<mã mục>` | câu hỏi | đáp án đúng (+ giải thích) | `polaris-errorlog`, `errorlog.md`, mã mục |
+| Lệch dự đoán | như trên | cần dự đoán gì (tiêu đề) | output thật | như trên |
+| Quên trạm nhớ | như trên | `<cung điện> · <trạm>: mục nào?` | ý cần nhớ | như trên |
+| Mục nhập tay | như trên | tình huống cần giải lại, dựng từ `prediction` / `result` | `why` + `fix` | như trên |
+| Tự kiểm tra bài học | `polaris:<thư mục môn>:selfcheck:<module id>:<index>` (index từ 1) | câu hỏi | đáp án | `polaris-selfcheck`, `roadmap.json`, `<module id> #<index>` |
+
+**Vì sao chỉ một bộ máy thích nghi:** hai bộ lập lịch trên cùng một mục làm nhân đôi lượt ôn và tạo nợ ôn tập, nên một bộ lập lịch thích nghi tốt hơn nhiều bộ cố định. Giãn cách tăng dần hay đều nhau không tạo khác biệt đáng tin cậy (Latimier, Peyre và Ramus 2021, [doi:10.1007/s10648-020-09572-8](https://doi.org/10.1007/s10648-020-09572-8)), nên hình dạng của một thang mốc cố định không phải thứ mang lại khả năng nhớ. Ôn tập cá nhân hóa cho kết quả tốt hơn cách giãn cách một-cỡ-cho-tất-cả (Lindsey và cs. 2014, [doi:10.1177/0956797613504302](https://doi.org/10.1177/0956797613504302)). Ôn Sổ lỗi phải giải lại, không đọc lại (ôn lại liên tiếp, successive relearning, Rawson và Dunlosky 2011, [doi:10.1037/a0023956](https://doi.org/10.1037/a0023956)), vì vậy mọi thẻ đều yêu cầu giải lại tình huống.
 
 ## Polaris + Aurora
 
@@ -128,7 +155,7 @@ flowchart TD
 
   subgraph Polaris_Loop ["3. Polaris: Vòng lặp theo dõi & Điều hướng"]
     L1["polaris_progress_sync"] --> L2["Ghi nhận Sổ lỗi (Error Log)"]
-    L1 --> L3["Lịch ôn tập ngắt quãng (D+1..D+35)"]
+    L1 --> L3["Thẻ vào hộp thư Vega (FSRS lập lịch ôn)"]
     L2 --> L4["polaris_today (Kế hoạch ngày & Dynamic Goal)"]
     L3 --> L4
   end
@@ -144,7 +171,7 @@ flowchart TD
 |---|---|
 | **Polaris** (repo này) | Kiến trúc sư thiết kế khóa học |
 | **[Aurora Slides](https://github.com/DuongNAD/aurora-slides-mcp)** | Bài giảng, thực hành và luồng sự kiện tiến độ |
-| **[Vega](https://github.com/DuongNAD/vega-mcp)** | Động cơ ghi nhớ thẻ ngắt quãng FSRS (`<hub>/.vega/cards.json`) |
+| **[Vega](https://github.com/DuongNAD/vega-mcp)** | Động cơ ghi nhớ thẻ ngắt quãng FSRS (`<hub>/.vega/cards.json`); bộ máy ôn tập duy nhất, được Polaris nạp qua `<hub>/.vega/inbox/` |
 | **[SmartDrive-OS](https://github.com/DuongNAD/smart-drive-os)** | Quản trị ổ SSD, tìm kiếm thông minh theo facts/sources/captures, bảo vệ thư mục môn học, hook cập nhật chỉ mục sau khi ghi |
 | **[Constellation](https://github.com/DuongNAD/constellation-mcp)** | Một bản kê (manifest) duy nhất, đăng ký vào Claude Code / Antigravity / Cursor / Codex, kiểm tra sức khỏe, chẩn đoán lệch cấu hình (drift doctor), cập nhật |
 
@@ -230,15 +257,15 @@ Mỗi tài liệu được chấm điểm (0-100) kèm lý do rõ ràng:
 4. **Đồng bộ tiến độ & Ôn tập ngắt quãng (`polaris_progress_sync`, `polaris_today`):**
    - `polaris_progress_sync` đọc file `progress.jsonl` do preview server của Aurora hoặc người học xuất ra (hỗ trợ các trường tùy chọn trong Aurora 0.6.1+: `chosenText`, `answerText`, `explanation`), đồng thời nhận diện và bỏ qua các sự kiện flashcard `"card"` dành riêng cho Vega. Định nghĩa chuẩn hóa có phiên bản (canonical, versioned) kèm JSON Schema và fixtures được lưu tại [contracts của Constellation](https://github.com/DuongNAD/constellation-mcp/tree/main/contracts), cùng với các learning-unit markers, hook cập nhật sau ghi (post-write hook) và nhãn nguồn tài liệu; tài liệu README này chỉ tóm lược lại các quy chuẩn đó.
    - Tự động ghi các lỗi trắc nghiệm (hiển thị văn bản phương án hoặc chỉ số, lời giải thích, và dòng nhắc tự điền nguyên nhân), lệch dự đoán code (hiển thị dự đoán, kết quả thật, và dòng nhắc mental model) và trạm trí nhớ quên (hiển thị trạm, ý cần nhớ, và dòng nhắc củng cố neo) vào `polaris/errorlog.md` ("Sổ lỗi").
-   - Lập lịch ôn tập ngắt quãng D+1, D+3, D+7, D+16, D+35 trong `polaris/reviews.json`.
-   - `polaris_today` tính toán phiên học 30p/60p, đọc `<hub>/.vega/cards.json` để hiển thị số thẻ Vega đến hạn hôm nay kèm bước tiếp theo `"vega_sync, then vega_session to review"`, phân bổ 10 phút vào công thức buổi học khi có thẻ đến hạn, và cập nhật khối `## Today's Dynamic Goal` vào `ACTIVE_LEARNING.md` của Hub.
+   - Giao việc ôn tập cho bộ máy đang có hiệu lực (xem [Một bộ máy ôn tập](#một-bộ-máy-ôn-tập-vega-v040)): với `vega`, mỗi lần đồng bộ ghi một file hộp thư nguyên tử (`<hub>/.vega/inbox/polaris-<stamp>-<hex>.jsonl`) mang một thẻ cho mỗi mục Sổ lỗi mới và các thẻ tự kiểm tra của bài học vừa hoàn thành, không thêm gì vào `polaris/reviews.json`; với `fixed`, lập lịch ôn tập ngắt quãng D+1, D+3, D+7, D+16, D+35 trong `polaris/reviews.json`.
+   - `polaris_today` tính toán phiên học 30p/60p, đọc `<hub>/.vega/cards.json` để hiển thị số thẻ Vega đến hạn hôm nay kèm bước tiếp theo `"vega_sync, then vega_session to review"` (với `vega` còn có thêm `vega_sync, rồi vega_session`), phân bổ 10 phút vào công thức buổi học khi có thẻ đến hạn, và cập nhật khối `## Today's Dynamic Goal` vào `ACTIVE_LEARNING.md` của Hub.
 
 ## Quy trình Prompts của Agent
 
 Polaris cung cấp 4 quy trình prompt mẫu:
 - **`new_course`**: Toàn bộ quy trình 8 bước có kiểm duyệt: Hồ sơ -> Brief & Chẩn đoán -> Nghiên cứu & Danh sách rút gọn -> Trích xuất Facts -> Xây dựng Lộ trình -> Lập Lịch trình -> Xuất Khóa học & Dàn ý -> Đồng bộ Tác vụ -> Dựng bài học đầu tiên với Aurora.
 - **`next_lesson`**: Vòng lặp học tập hàng ngày: Đồng bộ tiến độ -> Lập kế hoạch ngày -> Chọn bài học tiếp theo theo lịch -> Cập nhật dàn ý -> Dựng slide với Aurora tuân thủ trích dẫn facts -> Kiểm tra audit slide -> Đồng bộ tác vụ -> Ghi nhận kết quả ôn tập.
-- **`review`**: Phiên ôn tập gợi nhớ chủ động: Đồng bộ sự kiện tiến độ mới nhất -> Truy vấn các mục ôn tập đến hạn -> Hướng dẫn 5-10 phút ôn tập chủ động cho Sổ lỗi và trang vở tóm tắt.
+- **`review`**: Phiên ôn tập gợi nhớ chủ động: Đồng bộ sự kiện tiến độ mới nhất -> Truy vấn các mục ôn tập đến hạn (mốc cũ và số thẻ Vega đến hạn) -> với bộ máy `vega` chạy `vega_sync` rồi `vega_session`, ngược lại hướng dẫn 5-10 phút ôn tập chủ động cho Sổ lỗi và trang vở tóm tắt.
 - **`research`**: Tìm kiếm tài liệu chuyên sâu cho một module cụ thể trên tất cả các provider không cần API key.
 
 ## Kết nối máy chủ MCP
@@ -300,13 +327,13 @@ node dist/polaris.mjs export <subject_dir>
 # Đồng bộ bài học vào <subject>/TASKS.md
 node dist/polaris.mjs tasks <subject_dir>
 
-# Đồng bộ tiến độ học tập Aurora vào Sổ lỗi và lịch ôn tập
+# Đồng bộ tiến độ học tập Aurora vào Sổ lỗi và giao việc ôn tập cho bộ máy ôn tập (hộp thư Vega hoặc mốc D+ cố định)
 node dist/polaris.mjs progress <subject_dir> [course_dir]
 
 # Lập kế hoạch buổi học hôm nay và in khối Today's Dynamic Goal
 node dist/polaris.mjs today <subject_dir> [date]
 
-# Xem tài liệu hướng dẫn (topics: overview, pipeline, gates, sources, roadmap, research, schedule, export, tracking, progress, aurora, learner, rules)
+# Xem tài liệu hướng dẫn (topics: overview, pipeline, gates, sources, roadmap, research, schedule, export, tracking, progress, today, aurora, learner, rules)
 node dist/polaris.mjs guide [topic]
 
 # Xem phiên bản & trợ giúp
@@ -349,6 +376,7 @@ Polaris hoạt động liền mạch cùng [SmartDrive-OS](https://github.com/Du
 
 | Phiên bản | Mô tả |
 |---|---|
+| **0.4.0** | Một bộ máy ôn tập: việc ôn tập ngắt quãng do Vega (FSRS) lập lịch thay cho các mốc cố định D+1/D+3/D+7/D+16/D+35 của Polaris. Thêm trường hồ sơ `method.reviewEngine` (`vega` hoặc `fixed`; chưa đặt thì là `vega` khi có `<hub>/.vega/`, ngược lại là `fixed`), hiển thị bởi `polaris_profile get` và chủ đề hướng dẫn `learner`. Với `vega`, `polaris_errorlog_add` và các mục quiz/predict/recall của `polaris_progress_sync` vẫn ghi đúng mục Markdown vào `errorlog.md` nhưng dòng ôn tập thành `- **Ôn tập:** thẻ Vega ... (FSRS lập lịch)`, không thêm gì vào `reviews.json`, và mỗi mục một thẻ được gửi vào hộp thư Vega `<hub>/.vega/inbox/` (hợp đồng `vega-card-inbox.v1`, mỗi lần gọi công cụ một file nguyên tử, producer `polaris`, kiểm tra trước khi ghi); `polaris_lesson_done` gửi các câu tự kiểm tra của module thay cho các lượt ôn bài học cố định; `polaris_review_due` và `polaris_today` vẫn liệt kê các mốc cũ và thêm số thẻ Vega đến hạn kèm bước tiếp theo `vega_sync, rồi vega_session`. Với `fixed`, hành vi giữ nguyên. Thêm các module `inbox.ts`, `engine.ts`, `cards.ts`; cập nhật các chủ đề hướng dẫn `tracking`, `progress`, `today`, `learner`, `overview`. |
 | **0.3.6** | Hỗ trợ API key tùy chọn cho Semantic Scholar (`SEMANTIC_SCHOLAR_API_KEY`, alias `S2_API_KEY`) qua khối cấu hình `"env"` của MCP (đăng ký tại https://www.semanticscholar.org/product/api; không bao giờ lưu key trong kho git; keyless vẫn là mặc định); giới hạn giãn cách an toàn >= 1100 ms kẹp chốt chặn `POLARIS_S2_MIN_INTERVAL_MS` (tối thiểu 1000 ms); loại bỏ triệt để các header nhạy cảm (`authorization`, `proxy-authorization`, `x-api-key`, `cookie`) không phân biệt hoa thường đối với đối tượng Headers, mảng và plain object khi redirect sang origin khác trong `fetchSafeHop`; tuyệt đối không để lộ key trong log, mã lỗi, khóa cache hay kết quả công cụ; bổ sung `POLARIS_S2_URL` phục vụ kiểm thử. |
 | **0.3.5** | Khắc phục các vấn đề phát hiện từ kiểm thử thực tế (dogfooding): Bỏ qua kiểm tra số học đối chiếu chéo (`crossCheck`) cho các quy ước toán học thông dụng (số mũ/chỉ số dưới `R^2`, `x^2`, `O(d^3)`, `O(n log n)`, `w_1`, `L1/L2`, `l1/l2`), thứ nguyên (`1D/2D/3D`, `n×d`), từ chỉ thứ tự cấu trúc (`bước 1`, `slide 3`, mã `M1/M2.1`, `F12/S3`, số trang trong locator), biểu thức LaTeX trong `$...$` và mã nội dòng; giữ nguyên kiểm tra cho các số đo thực nghiệm (phần trăm, đơn vị đo, ngày tháng, hệ số `22.22x`, `50 TOPS`); ưu tiên thu thập bản open-access đã biết (`oaUrl`) trước đồng thời lưu giữ link nhà xuất bản gốc; nhận diện bot wall interstitial (< 1500 ký tự với dấu hiệu thử thách mạnh) tránh bắt nhầm bài viết thông thường; dùng chung cơ chế thu thập HTML/PDF cho open-access; kiểm tra robots.txt cho cả URL open-access; tự động fallback sang Open Access qua OpenAlex và Unpaywall khi URL gặp 401/403/429 hoặc bot wall / captcha; tài liệu hóa trường `roadmapPath` trong brief. |
 | **0.3.4** | Rào chắn bảo mật SSRF: Chặn Server-Side Request Forgery trong thu thập nguồn tài liệu và tra cứu nghiên cứu. Chỉ cho phép giao thức http/https, phân giải host qua DNS (`node:dns`), từ chối loopback (127/8, ::1), unspecified (0.0.0.0, ::), dải mạng riêng tư (10/8, 172.16/12, 192.168/16, fc00::/7), link-local / metadata cloud (169.254/16, fe80::/10), CGNAT (100.64/10), multicast, các dải dành riêng, IPv4-mapped IPv6 và localhost/*.localhost. Thủ công kiểm tra chuyển hướng redirect (tối đa 5 bước nhảy) trên từng bước. Bật `POLARIS_ALLOW_PRIVATE_URLS=1` khi cần kiểm thử cục bộ có chủ đích. |

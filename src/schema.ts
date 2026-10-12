@@ -12,6 +12,10 @@ export type SelfCheckLevel = (typeof SELF_CHECK_LEVELS)[number];
 
 /* ───────── Learner Profile ───────── */
 
+/** Spaced-review engines: vega = one adaptive FSRS scheduler fed through the Vega inbox; fixed = Polaris D+ steps. */
+export const REVIEW_ENGINES = ["vega", "fixed"] as const;
+export type ReviewEngine = (typeof REVIEW_ENGINES)[number];
+
 export const StudySlotSchema = z.strictObject({
   day: z.enum(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]).describe("Day of week: Mon, Tue, Wed, Thu, Fri, Sat, Sun"),
   minutes: z.number().int().min(15).max(480).describe("Duration of study slot in minutes"),
@@ -52,6 +56,12 @@ export const LearnerProfileSchema = z.strictObject({
     errorLog: z.string().default("Sổ lỗi"),
     sessionTypes: z.array(SessionTypeSchema).min(1),
     spacedReviewDays: z.array(z.number().int().min(1)).default([1, 3, 7, 16, 35]),
+    reviewEngine: z
+      .enum(REVIEW_ENGINES)
+      .optional()
+      .describe(
+        "Spaced-review engine: vega (FSRS via the Vega inbox) or fixed (Polaris D+ steps, spacedReviewDays). Unset = auto: vega when <hub>/.vega/ exists, else fixed",
+      ),
   }),
   taste: z.strictObject({
     slideStyle: z.string().default("Apple-keynote"),
@@ -642,6 +652,26 @@ export const ProgressStateSchema = z.object({
 });
 
 export type ProgressState = z.output<typeof ProgressStateSchema>;
+
+/** A blank progress state (no processed events, nothing completed). */
+export function emptyProgressState(updated: string): ProgressState {
+  return {
+    updated,
+    processedHashes: [],
+    dedupKeys: [],
+    lastSyncedFiles: [],
+    stats: {
+      totalEvents: 0,
+      quizTotal: 0,
+      quizCorrect: 0,
+      predictRight: 0,
+      predictDifferent: 0,
+      recallGot: 0,
+      recallMissed: 0,
+      lessonsCompleted: [],
+    },
+  };
+}
 
 export function validateProgressState(raw: unknown): ValidationOutcome<ProgressState> {
   const parsed = ProgressStateSchema.safeParse(raw);

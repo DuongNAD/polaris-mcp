@@ -13,6 +13,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { captureSources } from "./capture.js";
 import { checkQualityGates } from "./check.js";
+import { describeReviewEngine, resolveReviewEngine } from "./engine.js";
 import { exportCourse } from "./export.js";
 import { guideText, TOPICS } from "./guide.js";
 import { renderRoadmapMarkdown } from "./render.js";
@@ -41,14 +42,16 @@ import {
 import { syncTasks } from "./tasks.js";
 import {
   addErrorLogEntry,
-  getDueReviews,
   markLessonDone,
 } from "./tracking.js";
 import { syncProgress } from "./progress.js";
-import { getTodayPlan } from "./today.js";
+import { getReviewDueReport, getTodayPlan } from "./today.js";
 import { errMsg, subjectPaths, VERSION } from "./util.js";
 
 export * from "./schema.js";
+export * from "./engine.js";
+export * from "./inbox.js";
+export * from "./cards.js";
 export * from "./store.js";
 export * from "./capture.js";
 export * from "./check.js";
@@ -83,8 +86,8 @@ async function safe(fn: () => Promise<ToolResult>): Promise<ToolResult> {
 const INSTRUCTIONS = `Polaris MCP builds evidence-based personal study courses for self-learners from brief to Aurora Slides course.
 
 Workflow:
-1. polaris_guide (topics: "overview", "pipeline", "gates", "sources", "roadmap", "research", "schedule", "export", "tracking", "progress", "aurora", "learner", "rules").
-2. polaris_profile { action: "get" } to read learner methods, slots, and blackouts.
+1. polaris_guide (topics: "overview", "pipeline", "gates", "sources", "roadmap", "research", "schedule", "export", "tracking", "progress", "today", "aurora", "learner", "rules").
+2. polaris_profile { action: "get" } to read learner methods, slots, blackouts, and the review engine in force.
 3. polaris_start { subject_dir, brief } to initialize subject brief and polaris folder.
 4. Research & Discovery:
    - polaris_find { query, providers?, limit?, year_from?, lang? } to discover materials across keyless providers.
@@ -97,12 +100,14 @@ Workflow:
 8. polaris_schedule { subject_dir, start?, interleave_every? } to deterministically fit module hours into learner slots minus blackouts and P0 deadlines, writing schedule.json and ROADMAP.md section 3.2.
 9. polaris_export_course { subject_dir, course_dir? } to write Aurora course.json and lesson outline skeletons in polaris/lessons/<dir>.outline.md.
 10. polaris_tasks_sync { subject_dir } to append scheduled lesson and checkpoint tasks to TASKS.md under ## Polaris.
-11. Tracking & Spaced Repetition:
-    - polaris_progress_sync { subject_dir, course_dir?, file? } to ingest Aurora progress events into Sổ lỗi and schedule spaced reviews.
-    - polaris_errorlog_add { subject_dir, entry } to log runtime prediction gaps in polaris/errorlog.md and schedule D+1, D+3, D+7, D+16, D+35 reviews.
-    - polaris_lesson_done { subject_dir, lesson_dir, score? } to record completion and schedule spaced reviews.
-    - polaris_review_due { subject_dir, date? } to query due reviews.
-    - polaris_today { subject_dir, date?, minutes?, write? } to generate 60m/30m session plan & dynamic goal for the learning hub.
+11. Tracking & Spaced Repetition. One review engine decides who schedules (profile method.reviewEngine; unset = vega when <hub>/.vega/ exists, else fixed):
+    - vega: Vega (FSRS) is the single adaptive scheduler. Polaris keeps the human-readable Sổ lỗi (polaris/errorlog.md) and hands one card per entry, and per lesson self-check question, to Vega through the inbox <hub>/.vega/inbox/ (contract vega-card-inbox.v1, one file per tool call). Nothing is added to reviews.json. Next: vega_sync, then vega_session.
+    - fixed: Polaris schedules its own D+1, D+3, D+7, D+16, D+35 steps in polaris/reviews.json (the original behaviour).
+    - polaris_progress_sync { subject_dir, course_dir?, file?, hub? } to ingest Aurora progress events into Sổ lỗi and hand reviews to the engine in force.
+    - polaris_errorlog_add { subject_dir, entry, hub? } to log runtime prediction gaps in polaris/errorlog.md (vega: one card in the inbox; fixed: D+ steps).
+    - polaris_lesson_done { subject_dir, lesson_dir, score?, hub? } to record completion (vega: the module's self-check questions become cards; fixed: D+ steps).
+    - polaris_review_due { subject_dir, date?, hub? } to query due reviews (legacy fixed steps, plus the Vega due count under the vega engine).
+    - polaris_today { subject_dir, date?, minutes?, write?, hub? } to generate 60m/30m session plan & dynamic goal for the learning hub.
 
 Rules:
 - Evidence first: every factual bullet points to facts; every fact points to a source + locator (page [p. N], timestamp [mm:ss], section, lines).
@@ -127,10 +132,11 @@ async function startMcp(): Promise<void> {
         "READ FIRST. How to build evidence-based courses: pipeline, quality gates, source policy, roadmap format, research engine, learner preferences, and rules. No arguments = overview.",
       inputSchema: {
         topic: z.enum(TOPICS).optional().describe(`One of: ${TOPICS.join(" | ")}`),
+        hub: z.string().optional().describe("Learning hub root directory (only used by topic 'learner' to show the review engine in force)"),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ topic }) => safe(async () => text(await guideText(topic))),
+    async ({ topic, hub }) => safe(async () => text(await guideText(topic, hub))),
   );
 
   /* 2. polaris_profile */
@@ -139,10 +145,10 @@ async function startMcp(): Promise<void> {
     {
       title: "Learner profile",
       description:
-        "Read or update the learner profile (language, study methods, memory anchors, session lengths, visual taste, hard commitments).",
+        "Read or update the learner profile (language, study methods, memory anchors, session lengths, visual taste, hard commitments, review engine). method.reviewEngine is 'vega' (Vega FSRS schedules reviews through the inbox) or 'fixed' (Polaris D+ steps); null removes the override. Unset = vega when <hub>/.vega/ exists, else fixed. The output ends with the engine in force.",
       inputSchema: {
         action: z.enum(["get", "update"]).default("get"),
-        patch: z.record(z.string(), z.unknown()).optional().describe("Fields to update when action is 'update'"),
+        patch: z.record(z.string(), z.unknown()).optional().describe("Fields to update when action is 'update', e.g. {\"method\": {\"reviewEngine\": \"fixed\"}}"),
         hub: z.string().optional().describe("Learning hub root directory (default: POLARIS_HUB or D:/02_Learning_Knowledge)"),
       },
       annotations: { readOnlyHint: false, openWorldHint: false },
@@ -154,10 +160,12 @@ async function startMcp(): Promise<void> {
             return text("Missing patch data for profile update.", true);
           }
           const updated = await updateProfile(patch, hub);
-          return text(`Profile updated:\n${JSON.stringify(updated, null, 2)}`);
+          const engineInfo = await resolveReviewEngine(hub);
+          return text(`Profile updated:\n${JSON.stringify(updated, null, 2)}\n\n${describeReviewEngine(engineInfo)}`);
         }
         const profile = await getProfile(hub);
-        return text(`Learner Profile:\n${JSON.stringify(profile, null, 2)}`);
+        const engineInfo = await resolveReviewEngine(hub);
+        return text(`Learner Profile:\n${JSON.stringify(profile, null, 2)}\n\n${describeReviewEngine(engineInfo)}`);
       }),
   );
 
@@ -630,7 +638,7 @@ async function startMcp(): Promise<void> {
     {
       title: "Add error log entry ('Sổ lỗi')",
       description:
-        "Record a runtime predict-vs-run gap in polaris/errorlog.md ('Sổ lỗi') and automatically schedule spaced repetition reviews (D+1, D+3, D+7, D+16, D+35) in polaris/reviews.json.",
+        "Record a runtime predict-vs-run gap in polaris/errorlog.md ('Sổ lỗi'). Review engine vega (default when <hub>/.vega/ exists): the entry's review line points at a Vega card and one card goes to the Vega inbox <hub>/.vega/inbox/ (FSRS schedules it; nothing is added to reviews.json); next vega_sync, then vega_session. Engine fixed: schedules D+1, D+3, D+7, D+16, D+35 reviews in polaris/reviews.json.",
       inputSchema: {
         subject_dir: z.string().min(1).describe("Subject directory path"),
         entry: z.object({
@@ -643,7 +651,7 @@ async function startMcp(): Promise<void> {
           fix: z.string().min(1).describe("Fix and general rule learned"),
           source: z.string().optional().describe("Reference or source ID"),
         }),
-        hub: z.string().optional(),
+        hub: z.string().optional().describe("Learning hub root directory (default: POLARIS_HUB); decides the review engine and where the Vega inbox lives"),
       },
       annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
@@ -660,13 +668,13 @@ async function startMcp(): Promise<void> {
     {
       title: "Mark lesson completed",
       description:
-        "Record lesson completion in polaris/reviews.json and schedule spaced repetition reviews (D+1, D+3, D+7, D+16, D+35) for retention.",
+        "Record lesson completion. Review engine vega (default when <hub>/.vega/ exists): the lesson's module self-check questions (roadmap selfCheck {q, answer}) go to the Vega inbox as cards, nothing is added to reviews.json, and no card is written when the module has no self-check items; next vega_sync, then vega_session. Engine fixed: records the lesson in polaris/reviews.json and schedules D+1, D+3, D+7, D+16, D+35 reviews.",
       inputSchema: {
         subject_dir: z.string().min(1).describe("Subject directory path"),
         lesson_dir: z.string().min(1).describe("Lesson folder name e.g. '01-vong-lap-agent'"),
         date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD").optional().describe("Completion date (default today)"),
         score: z.union([z.number(), z.string()]).optional().describe("Quiz score or assessment result"),
-        hub: z.string().optional(),
+        hub: z.string().optional().describe("Learning hub root directory (default: POLARIS_HUB); decides the review engine and where the Vega inbox lives"),
       },
       annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -683,16 +691,17 @@ async function startMcp(): Promise<void> {
     {
       title: "Query due reviews",
       description:
-        "List all lesson reviews and error log entries due on or before target date, sorted oldest first, with concise review advice.",
+        "List the legacy fixed review steps (polaris/reviews.json) due on or before target date, sorted oldest first, with concise review advice. Under the vega review engine it adds one line with the Vega due count (read-only from <hub>/.vega/cards.json) and the next step vega_sync, rồi vega_session.",
       inputSchema: {
         subject_dir: z.string().min(1).describe("Subject directory path"),
         date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD").optional().describe("Target query date (default today)"),
+        hub: z.string().optional().describe("Learning hub root directory (default: POLARIS_HUB); decides the review engine and where cards.json is read"),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ subject_dir, date }) =>
+    async ({ subject_dir, date, hub }) =>
       safe(async () => {
-        const res = await getDueReviews(subject_dir, date);
+        const res = await getReviewDueReport(subject_dir, date, hub);
         return text(res.summary);
       }),
   );
@@ -703,12 +712,12 @@ async function startMcp(): Promise<void> {
     {
       title: "Sync Aurora Slides learning progress",
       description:
-        "Read Aurora Slides interactive learning events from `<course_dir>/progress.jsonl` or exported file, map lessons to modules, add error log entries for wrong quizzes, predict gaps, and missed palace stations, and schedule spaced reviews (D+1, D+3, D+7, D+16, D+35) for completed lessons. Idempotent.",
+        "Read Aurora Slides interactive learning events from `<course_dir>/progress.jsonl` or exported file, map lessons to modules, and add error log entries for wrong quizzes, predict gaps, and missed palace stations. Review engine vega (default when <hub>/.vega/ exists): one inbox file for the whole sync carries a Vega card per new entry plus the self-check cards of newly completed lessons (nothing is added to reviews.json); next vega_sync, then vega_session. Engine fixed: schedules D+1, D+3, D+7, D+16, D+35 reviews. Idempotent.",
       inputSchema: {
         subject_dir: z.string().min(1).describe("Subject directory path"),
         course_dir: z.string().optional().describe("Target Aurora course directory (defaults to course-map.json or <subject>/05_Slides/<slug>)"),
         file: z.string().optional().describe("Explicit progress JSONL file path (e.g. aurora-progress-<slug>.jsonl)"),
-        hub: z.string().optional().describe("Learning hub root directory"),
+        hub: z.string().optional().describe("Learning hub root directory (default: POLARIS_HUB); decides the review engine and where the Vega inbox lives"),
       },
       annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -725,7 +734,7 @@ async function startMcp(): Promise<void> {
     {
       title: "Generate daily session plan and dynamic goal",
       description:
-        "Generate a 60- or 30-minute session plan following learner session recipe: due spaced reviews, next uncompleted lesson from schedule with Aurora slide & outline paths, and practice tier with Definition of Done (DoD). When write: true, updates or inserts ## Today's Dynamic Goal block in <hub>/ACTIVE_LEARNING.md.",
+        "Generate a 60- or 30-minute session plan following learner session recipe: due spaced reviews (legacy fixed steps, plus the Vega FSRS card load read-only from <hub>/.vega/cards.json with the next step vega_sync, rồi vega_session), next uncompleted lesson from schedule with Aurora slide & outline paths, and practice tier with Definition of Done (DoD). When write: true, updates or inserts ## Today's Dynamic Goal block in <hub>/ACTIVE_LEARNING.md.",
       inputSchema: {
         subject_dir: z.string().min(1).describe("Subject directory path"),
         date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be YYYY-MM-DD").optional().describe("Session date (defaults to today)"),
@@ -847,7 +856,7 @@ async function startMcp(): Promise<void> {
               "5. Build the deck in <course_dir>/<lesson_dir>/deck.json using Aurora Slides tools, strictly adhering to Aurora accuracy rules and citing facts in `source`.",
               "6. Run aurora_audit to verify slide length, typography, and contrast.",
               "7. Run polaris_tasks_sync to keep tasks synchronized.",
-              "8. When the learner finishes studying the deck, call polaris_progress_sync or polaris_lesson_done to schedule retention reviews.",
+              "8. When the learner finishes studying the deck, call polaris_progress_sync or polaris_lesson_done to hand retention reviews to the review engine (vega: cards go to the Vega inbox, then vega_sync and vega_session; fixed: D+ steps in reviews.json).",
             ].join("\n"),
           },
         },
@@ -875,8 +884,8 @@ async function startMcp(): Promise<void> {
               `Conduct an active spaced repetition review session for course at ${subject_dir}${date ? ` on date ${date}` : ""}.`,
               "",
               "1. Run polaris_progress_sync to ensure all latest Aurora interactive learning events are synchronized.",
-              "2. Run polaris_review_due to list all lessons and error log entries due today.",
-              "3. Guide a 5-10 minute active recall session with the learner:",
+              "2. Run polaris_review_due to list the legacy fixed review steps due today (and, under the vega engine, the Vega due count).",
+              "3. If the review engine is vega (polaris_review_due shows the Vega line), run vega_sync and then vega_session (Vega MCP): the learner re-solves each card before seeing the answer. Otherwise guide a 5-10 minute active recall session with the learner:",
               "   - For Sổ lỗi (error log) entries: Present the symptom and initial prediction without showing the fix; ask the learner to explain the root cause and the rule learned.",
               "   - For Lesson reviews: Walk through the memory palace stations, review the 4-8 line notebook summary, and ask 2-3 retrieval questions.",
               "4. If any errors or prediction gaps occur during review, record them using polaris_errorlog_add.",

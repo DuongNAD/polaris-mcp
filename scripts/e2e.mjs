@@ -7,6 +7,11 @@
  * offline fixture normalization/dedup/ranking, shortlist generation, persistence,
  * roadmap rendering, and CLI commands on a temporary directory under %TEMP%.
  *
+ * Section 3.21b covers the review engines (v0.4.0): the Vega inbox hand-off (contract vega-card-inbox.v1) for the
+ * vega engine, the unchanged fixed engine, auto-detection from <hub>/.vega/, the profile override, and the inbox
+ * validator and atomic writer. Every hub, subject and inbox used there lives under %TEMP%; the servers are started with
+ * POLARIS_HUB pointing at the temporary hub, so no call can reach the real learning hub.
+ *
  *   node scripts/e2e.mjs
  *   $env:POLARIS_E2E_KEEP="1"; node scripts/e2e.mjs
  */
@@ -877,6 +882,8 @@ const ssrfTransport = new StdioClientTransport({
   stderr: "inherit",
   env: {
     ...process.env,
+    // Safety net: a call without an explicit hub must never reach the real learning hub.
+    POLARIS_HUB: TEST_DIR,
     POLARIS_CACHE_DIR: CACHE_DIR,
     POLARIS_SMARTDRIVE_CMD: `node "${SMARTDRIVE_SCRIPT}" "${SMARTDRIVE_LOG}"`,
     POLARIS_ALLOW_PRIVATE_URLS: undefined,
@@ -921,6 +928,8 @@ const transport = new StdioClientTransport({
   stderr: "inherit",
   env: {
     ...process.env,
+    // Safety net: a call without an explicit hub must never reach the real learning hub.
+    POLARIS_HUB: TEST_DIR,
     POLARIS_CACHE_DIR: CACHE_DIR,
     POLARIS_SMARTDRIVE_CMD: `node "${SMARTDRIVE_SCRIPT}" "${SMARTDRIVE_LOG}"`,
     POLARIS_ALLOW_PRIVATE_URLS: "1",
@@ -1806,6 +1815,791 @@ try {
       textOf(rTodayVega).includes("10 phút: Thẻ nhớ Vega FSRS (2 thẻ đến hạn)"),
   );
 
+  /* ───────── 3.21b Review engine: Vega inbox hand-off (v0.4.0) ───────── */
+
+  console.log("\n--- Review Engine: Vega Inbox Hand-off (v0.4.0) ---");
+
+  ok("server reports version 0.4.0", info?.version === "0.4.0", `${info?.name} ${info?.version}`);
+
+  // Fixtures live under %TEMP% only. One folder per hub; each hub decides its own engine.
+  const ENGINE_DIR = join(TEST_DIR, "engine");
+  const HUB_VEGA = join(ENGINE_DIR, "hub_vega"); // has .vega/ -> auto-detected vega
+  const HUB_FIXED = join(ENGINE_DIR, "hub_fixed"); // no .vega/ -> auto-detected fixed
+  const HUB_FILE = join(ENGINE_DIR, "hub_vega_is_a_file"); // ".vega" is a file, not a folder -> fixed
+  mkdirSync(join(HUB_VEGA, ".vega"), { recursive: true });
+  mkdirSync(HUB_FIXED, { recursive: true });
+  mkdirSync(HUB_FILE, { recursive: true });
+  writeFileSync(join(HUB_FILE, ".vega"), "not a folder", "utf8");
+
+  const inboxDirOf = (hub) => join(hub, ".vega", "inbox");
+  const inboxFilesOf = (hub) => (existsSync(inboxDirOf(hub)) ? readdirSync(inboxDirOf(hub)).sort() : []);
+  const readInboxFile = (hub, name) =>
+    readFileSync(join(inboxDirOf(hub), name), "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l));
+  const entryIdOf = (res) => /Mã mục: (ERR_\d{4}-\d{2}-\d{2}_[0-9a-f]{6})/.exec(textOf(res))?.[1];
+  const keySuffix = (key) => key.split(":").slice(2).join(":");
+
+  // A subject with roadmap (self-check questions), brief and a course map pointing at its own course folder.
+  const makeSubject = (name) => {
+    const dir = join(ENGINE_DIR, name);
+    mkdirSync(join(dir, "polaris"), { recursive: true });
+    for (const f of ["brief.json", "roadmap.json", "course-map.json"]) {
+      writeFileSync(join(dir, "polaris", f), readFileSync(join(SUBJECT_DIR, "polaris", f), "utf8"), "utf8");
+    }
+    const cmPath = join(dir, "polaris", "course-map.json");
+    const courseMap = JSON.parse(readFileSync(cmPath, "utf8"));
+    courseMap.courseDir = join(dir, "05_Slides", "ai-agents-101");
+    writeFileSync(cmPath, JSON.stringify(courseMap, null, 2), "utf8");
+    mkdirSync(courseMap.courseDir, { recursive: true });
+    return { dir, courseDir: courseMap.courseDir, courseMap };
+  };
+
+  // 3.21b.1 Engine resolution (read-only) and its display
+  const infoVega = await polarisLib.resolveReviewEngine(HUB_VEGA);
+  const infoFixed = await polarisLib.resolveReviewEngine(HUB_FIXED);
+  const infoFile = await polarisLib.resolveReviewEngine(HUB_FILE);
+  ok("engine auto-detection: <hub>/.vega/ present -> vega", infoVega.engine === "vega" && infoVega.source === "auto");
+  ok("engine auto-detection: no <hub>/.vega/ -> fixed", infoFixed.engine === "fixed" && infoFixed.source === "auto");
+  ok("engine auto-detection: a .vega file is not a Vega folder -> fixed", infoFile.engine === "fixed" && !infoFile.vegaDirExists);
+  ok(
+    "engine resolution is read-only (creates no profile and no .vega folder)",
+    !existsSync(join(HUB_FIXED, ".polaris")) && !existsSync(join(HUB_FIXED, ".vega")),
+  );
+
+  r = await call("polaris_profile", { action: "get", hub: HUB_VEGA });
+  ok(
+    "profile get shows the effective engine: vega (auto-detected from .vega/)",
+    !r.isError && textOf(r).includes('"lang": "vi"') && textOf(r).includes("Bộ máy ôn tập hiệu lực (reviewEngine): vega — tự nhận diện, có thư mục"),
+    textOf(r).split("\n").slice(-1)[0],
+  );
+  r = await call("polaris_profile", { action: "get", hub: HUB_FIXED });
+  ok(
+    "profile get shows the effective engine: fixed (no .vega/)",
+    !r.isError && textOf(r).includes("Bộ máy ôn tập hiệu lực (reviewEngine): fixed — tự nhận diện, chưa có thư mục"),
+    textOf(r).split("\n").slice(-1)[0],
+  );
+
+  // 3.21b.2 Vega engine: manual error log entry -> Markdown entry + one inbox card, no reviews.json item
+  const V = makeSubject("Vega_Course");
+  const legacyReviews =
+    JSON.stringify(
+      {
+        updated: "2026-10-10",
+        items: [
+          {
+            id: "LESSON_legacy-lesson",
+            type: "lesson",
+            title: "Ôn bài học: legacy-lesson",
+            lessonDir: "legacy-lesson",
+            createdDate: "2026-10-10",
+            steps: [
+              { dayOffset: 1, dueDate: "2026-10-11", done: false },
+              { dayOffset: 3, dueDate: "2026-10-13", done: false },
+              { dayOffset: 7, dueDate: "2026-10-17", done: false },
+            ],
+          },
+        ],
+      },
+      null,
+      2,
+    ) + "\n";
+  const vReviewsPath = join(V.dir, "polaris", "reviews.json");
+  writeFileSync(vReviewsPath, legacyReviews, "utf8");
+
+  const manualEntry = {
+    date: "2026-10-15",
+    module: "M1",
+    lesson: "01-agent-va-vong-lap-react-a",
+    prediction: "regex parse khớp mọi biểu thức ngoặc lồng",
+    result: "calculator báo syntax error vì regex dừng ở dấu đóng đầu tiên",
+    why: "regex lười dừng ở dấu đóng ngoặc đơn đầu tiên",
+    fix: "Dùng bộ đếm độ sâu ngoặc hoặc parser đệ quy",
+    source: "Lab 1",
+  };
+  let before = inboxFilesOf(HUB_VEGA);
+  r = await call("polaris_errorlog_add", { subject_dir: V.dir, entry: manualEntry, hub: HUB_VEGA });
+  const manualId = entryIdOf(r);
+  const manualKey = `polaris:Vega_Course:${manualId}`;
+  ok(
+    "vega engine: errorlog_add names the Vega card and the next step",
+    !r.isError && Boolean(manualId) && textOf(r).includes(manualKey) && textOf(r).includes("vega_sync, rồi vega_session"),
+    textOf(r).split("\n").slice(0, 3).join(" | "),
+  );
+  let newFiles = inboxFilesOf(HUB_VEGA).filter((f) => !before.includes(f));
+  ok(
+    "vega engine: errorlog_add writes exactly one inbox file polaris-<UTC stamp>-<6 hex>.jsonl",
+    newFiles.length === 1 && polarisLib.INBOX_FILE_NAME_RE.test(newFiles[0]),
+    newFiles.join(", "),
+  );
+  const manualLines = newFiles.length === 1 ? readInboxFile(HUB_VEGA, newFiles[0]) : [];
+  const manualCard = manualLines[0];
+  ok(
+    "vega engine: the inbox file holds one valid line with the right key, producer and origin",
+    manualLines.length === 1 &&
+      polarisLib.validateInboxLine(manualCard).ok &&
+      manualCard.key === manualKey &&
+      manualCard.producer === "polaris" &&
+      manualCard.subject === "Vega_Course" &&
+      manualCard.origin.kind === "polaris-errorlog" &&
+      manualCard.origin.locator === manualId &&
+      manualCard.origin.path.endsWith("polaris/errorlog.md") &&
+      !Number.isNaN(Date.parse(manualCard.t)),
+    JSON.stringify(manualCard?.origin),
+  );
+  ok(
+    "vega engine: manual card front is the situation to re-solve (symptom + prediction), back is why + fix",
+    manualCard.front.includes(manualEntry.result) &&
+      manualCard.front.includes(manualEntry.prediction) &&
+      manualCard.front.endsWith("là gì?") &&
+      manualCard.back.includes(manualEntry.why) &&
+      manualCard.back.includes(manualEntry.fix) &&
+      manualCard.front.length <= 600 &&
+      manualCard.back.length <= 1200,
+    manualCard.front.slice(0, 80),
+  );
+  const vErrorLog = readFileSync(join(V.dir, "polaris", "errorlog.md"), "utf8");
+  ok(
+    "vega engine: errorlog.md keeps the entry; the D+ line becomes the Vega card line",
+    vErrorLog.includes(manualEntry.why) &&
+      vErrorLog.includes(`- **Ôn tập:** thẻ Vega \`${manualKey}\` (FSRS lập lịch)`) &&
+      !vErrorLog.includes("Lịch ôn lại giãn cách"),
+  );
+  ok(
+    "vega engine: reviews.json is untouched (no item added; legacy steps neither deleted nor migrated)",
+    readFileSync(vReviewsPath, "utf8") === legacyReviews,
+  );
+  ok(
+    "Polaris never writes Vega's own files (cards.json, reviews.jsonl) and leaves no *.tmp behind",
+    !existsSync(join(HUB_VEGA, ".vega", "cards.json")) &&
+      !existsSync(join(HUB_VEGA, ".vega", "reviews.jsonl")) &&
+      inboxFilesOf(HUB_VEGA).every((f) => f.endsWith(".jsonl")),
+  );
+
+  // 3.21b.3 Vega engine: progress_sync with quiz, predict and recall misses -> one inbox file with 3 valid lines
+  const mkEvt = (o) => ({
+    v: 1,
+    course: "AI Agents 101",
+    lesson: "01-agent-va-vong-lap-react-a",
+    deck: "Agent và Vòng lặp ReAct",
+    slideId: null,
+    ...o,
+  });
+  const vQuiz = mkEvt({
+    t: "2026-10-16T09:00:00+07:00",
+    slide: 3,
+    type: "quiz",
+    question: "ReAct agent khác gì so với Chain-of-Thought tiêu chuẩn?",
+    chosen: [1],
+    answer: [2],
+    chosenText: ["Chỉ suy luận, không gọi công cụ"],
+    answerText: ["Xen kẽ suy luận và hành động với công cụ"],
+    explanation: "ReAct cho phép quan sát kết quả của công cụ rồi suy luận tiếp.",
+    correct: false,
+  });
+  const vPredict = mkEvt({
+    t: "2026-10-16T09:05:00+07:00",
+    slide: 6,
+    type: "predict",
+    title: "Dự đoán output khi tool trả về mã lỗi 404",
+    prediction: "Agent sẽ crash ngay lập tức",
+    rating: "different",
+    output: "Agent bắt exception, sinh Thought mới và đổi query tìm kiếm.",
+  });
+  const vRecall = mkEvt({
+    t: "2026-10-16T09:10:00+07:00",
+    slide: 8,
+    type: "recall",
+    palace: "Phòng làm việc",
+    station: 2,
+    place: "Bàn làm việc",
+    item: "Vòng lặp ReAct Think-Act-Observe",
+    rating: "missed",
+  });
+  const vProgressFile = join(V.courseDir, "progress.jsonl");
+  writeFileSync(vProgressFile, [vQuiz, vPredict, vRecall].map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
+
+  before = inboxFilesOf(HUB_VEGA);
+  r = await call("polaris_progress_sync", { subject_dir: V.dir, hub: HUB_VEGA });
+  ok(
+    "vega engine: progress_sync reports 3 new entries and the inbox hand-off",
+    !r.isError &&
+      textOf(r).includes("Mục mới thêm vào Sổ lỗi: 3") &&
+      textOf(r).includes("Hộp thư Vega: đã gửi 3 thẻ") &&
+      textOf(r).includes("vega_sync, rồi vega_session"),
+    textOf(r).split("\n").find((l) => l.startsWith("Hộp thư Vega")),
+  );
+  newFiles = inboxFilesOf(HUB_VEGA).filter((f) => !before.includes(f));
+  ok("vega engine: one sync writes one inbox file", newFiles.length === 1 && polarisLib.INBOX_FILE_NAME_RE.test(newFiles[0]), newFiles.join(", "));
+  const syncLines = newFiles.length === 1 ? readInboxFile(HUB_VEGA, newFiles[0]) : [];
+  ok(
+    "vega engine: the sync file has 3 valid lines with distinct polaris:<subject>:<entry id> keys",
+    syncLines.length === 3 &&
+      syncLines.every((l) => polarisLib.validateInboxLine(l).ok) &&
+      new Set(syncLines.map((l) => l.key)).size === 3 &&
+      syncLines.every((l) => /^polaris:Vega_Course:ERR_\d{4}-\d{2}-\d{2}_[0-9a-f]{6}$/.test(l.key)) &&
+      syncLines.every((l) => l.origin.kind === "polaris-errorlog" && l.origin.locator === keySuffix(l.key)),
+    syncLines.map((l) => l.key).join(", "),
+  );
+  const quizCard = syncLines.find((l) => l.tags?.includes("trac-nghiem"));
+  const predictCard = syncLines.find((l) => l.tags?.includes("du-doan"));
+  const recallCard = syncLines.find((l) => l.tags?.includes("cung-dien-tri-nho"));
+  ok(
+    "quiz card: front = question, back = correct answer + explanation",
+    quizCard?.front === vQuiz.question &&
+      quizCard.back.includes("Đáp án đúng: Xen kẽ suy luận và hành động với công cụ") &&
+      quizCard.back.includes(vQuiz.explanation) &&
+      quizCard.deck === vQuiz.lesson,
+    quizCard?.back,
+  );
+  ok(
+    "predict card: front = what to predict (title), back = the real output",
+    predictCard?.front === vPredict.title && predictCard.back === vPredict.output,
+    predictCard?.front,
+  );
+  ok(
+    "recall card: front = '<palace> · <place>: mục nào?', back = the item",
+    recallCard?.front === "Phòng làm việc · Bàn làm việc: mục nào?" && recallCard.back === vRecall.item,
+    recallCard?.front,
+  );
+  const vErrorLog2 = readFileSync(join(V.dir, "polaris", "errorlog.md"), "utf8");
+  ok(
+    "vega engine: the 3 synced entries are in errorlog.md with Vega card lines, none with D+ lines",
+    syncLines.every((l) => vErrorLog2.includes(`- **Ôn tập:** thẻ Vega \`${l.key}\` (FSRS lập lịch)`)) &&
+      vErrorLog2.includes("**Câu hỏi:** ReAct agent khác gì so với Chain-of-Thought tiêu chuẩn?") &&
+      vErrorLog2.includes("**Nguyên nhân gốc rễ:** (tự điền khi ôn: vì sao chọn sai?)") &&
+      !vErrorLog2.includes("Lịch ôn lại giãn cách"),
+  );
+  ok("vega engine: progress_sync adds nothing to reviews.json", readFileSync(vReviewsPath, "utf8") === legacyReviews);
+
+  before = inboxFilesOf(HUB_VEGA);
+  r = await call("polaris_progress_sync", { subject_dir: V.dir, hub: HUB_VEGA });
+  ok(
+    "vega engine: a second progress_sync is idempotent (no new entries, no new inbox file)",
+    !r.isError &&
+      textOf(r).includes("Mục mới thêm vào Sổ lỗi: 0") &&
+      textOf(r).includes("Hộp thư Vega: không có thẻ mới") &&
+      inboxFilesOf(HUB_VEGA).length === before.length,
+  );
+
+  // A later sync with a new miss AND a completed lesson still produces ONE file (error-log card + self-check cards)
+  const vQuiz2 = mkEvt({
+    t: "2026-10-16T09:20:00+07:00",
+    slide: 5,
+    type: "quiz",
+    question: "Tại sao cần max_steps trong vòng lặp ReAct?",
+    chosen: [0],
+    answer: [3],
+    correct: false,
+  });
+  const vComplete = mkEvt({ t: "2026-10-16T09:30:00+07:00", slide: 12, type: "complete", slides: 12, quiz: "3/4", predictions: "2/3" });
+  writeFileSync(
+    vProgressFile,
+    readFileSync(vProgressFile, "utf8") + [vQuiz2, vComplete].map((e) => JSON.stringify(e)).join("\n") + "\n",
+    "utf8",
+  );
+  before = inboxFilesOf(HUB_VEGA);
+  r = await call("polaris_progress_sync", { subject_dir: V.dir, hub: HUB_VEGA });
+  newFiles = inboxFilesOf(HUB_VEGA).filter((f) => !before.includes(f));
+  const comboLines = newFiles.length === 1 ? readInboxFile(HUB_VEGA, newFiles[0]) : [];
+  const m1Self = V.courseMap.lessons.find((l) => l.dir === vComplete.lesson)?.module;
+  const roadmapV = JSON.parse(readFileSync(join(V.dir, "polaris", "roadmap.json"), "utf8"));
+  const m1Module = roadmapV.modules.find((m) => m.id === m1Self);
+  const comboSelf = comboLines.filter((l) => l.origin.kind === "polaris-selfcheck");
+  const comboErr = comboLines.filter((l) => l.origin.kind === "polaris-errorlog");
+  ok(
+    "vega engine: new miss + completed lesson in one sync -> one inbox file (1 error-log card + the module's self-check cards)",
+    !r.isError &&
+      newFiles.length === 1 &&
+      comboErr.length === 1 &&
+      comboSelf.length === m1Module.selfCheck.length &&
+      comboLines.every((l) => polarisLib.validateInboxLine(l).ok),
+    `${comboLines.length} lines in ${newFiles.length} file(s)`,
+  );
+  ok(
+    "quiz card without option texts falls back to the answer index",
+    comboErr[0]?.front === vQuiz2.question && comboErr[0].back === "Đáp án đúng: [3]",
+    comboErr[0]?.back,
+  );
+  const vState = JSON.parse(readFileSync(join(V.dir, "polaris", "progress-state.json"), "utf8"));
+  ok(
+    "vega engine: the completed lesson is recorded in progress-state.json, not in reviews.json",
+    vState.stats.lessonsCompleted.includes(vComplete.lesson) && readFileSync(vReviewsPath, "utf8") === legacyReviews,
+  );
+
+  // 3.21b.4 Vega engine: polaris_lesson_done -> self-check cards from the lesson's module
+  const m2Lesson = V.courseMap.lessons.find((l) => l.module === "M2")?.dir;
+  const m2Module = roadmapV.modules.find((m) => m.id === "M2");
+  before = inboxFilesOf(HUB_VEGA);
+  r = await call("polaris_lesson_done", { subject_dir: V.dir, lesson_dir: m2Lesson, date: "2026-10-16", score: "4/4", hub: HUB_VEGA });
+  newFiles = inboxFilesOf(HUB_VEGA).filter((f) => !before.includes(f));
+  const doneLines = newFiles.length === 1 ? readInboxFile(HUB_VEGA, newFiles[0]) : [];
+  ok(
+    "vega engine: lesson_done reports the self-check cards sent to Vega and the next step",
+    !r.isError &&
+      textOf(r).includes("Đã ghi nhận hoàn thành bài học") &&
+      textOf(r).includes(`Đã gửi ${m2Module.selfCheck.length} thẻ tự kiểm tra của module M2`) &&
+      textOf(r).includes("vega_sync, rồi vega_session") &&
+      !textOf(r).includes("D+1:"),
+    textOf(r).split("\n").slice(0, 4).join(" | "),
+  );
+  ok(
+    "vega engine: lesson_done writes one file with one valid card per self-check question",
+    newFiles.length === 1 &&
+      doneLines.length === m2Module.selfCheck.length &&
+      doneLines.every((l) => polarisLib.validateInboxLine(l).ok),
+    `${doneLines.length} lines`,
+  );
+  ok(
+    "self-check cards: key polaris:<subject>:selfcheck:<module>:<index>, origin polaris-selfcheck on roadmap.json, locator '<module> #<index>'",
+    doneLines.every(
+      (l, i) =>
+        l.key === `polaris:Vega_Course:selfcheck:M2:${i + 1}` &&
+        l.origin.kind === "polaris-selfcheck" &&
+        l.origin.path.endsWith("polaris/roadmap.json") &&
+        l.origin.locator === `M2 #${i + 1}` &&
+        l.front === m2Module.selfCheck[i].q &&
+        l.back === m2Module.selfCheck[i].answer &&
+        l.deck === m2Lesson,
+    ),
+    doneLines[0]?.key,
+  );
+  ok(
+    "vega engine: lesson_done adds no reviews.json item and records the completion in progress-state.json",
+    readFileSync(vReviewsPath, "utf8") === legacyReviews &&
+      JSON.parse(readFileSync(join(V.dir, "polaris", "progress-state.json"), "utf8")).stats.lessonsCompleted.includes(m2Lesson),
+  );
+
+  before = inboxFilesOf(HUB_VEGA);
+  r = await call("polaris_lesson_done", { subject_dir: V.dir, lesson_dir: "bai-khong-ton-tai", hub: HUB_VEGA });
+  ok(
+    "vega engine: a lesson with no matching module writes nothing and says so",
+    !r.isError &&
+      textOf(r).includes("Không có thẻ nào được gửi vào hộp thư Vega") &&
+      textOf(r).includes("không khớp module nào") &&
+      inboxFilesOf(HUB_VEGA).length === before.length,
+    textOf(r).split("\n").slice(-1)[0],
+  );
+  const NO_ROADMAP = join(ENGINE_DIR, "No_Roadmap");
+  mkdirSync(NO_ROADMAP, { recursive: true });
+  r = await call("polaris_lesson_done", { subject_dir: NO_ROADMAP, lesson_dir: "M1", hub: HUB_VEGA });
+  ok(
+    "vega engine: a subject without a readable roadmap writes nothing and says so",
+    !r.isError &&
+      textOf(r).includes("chưa đọc được polaris/roadmap.json") &&
+      inboxFilesOf(HUB_VEGA).length === before.length,
+  );
+  before = inboxFilesOf(HUB_VEGA);
+  r = await call("polaris_lesson_done", { subject_dir: V.dir, lesson_dir: "m1", hub: HUB_VEGA });
+  newFiles = inboxFilesOf(HUB_VEGA).filter((f) => !before.includes(f));
+  ok(
+    "vega engine: a lesson dir that is itself a module id (any case) maps to that module",
+    !r.isError && newFiles.length === 1 && readInboxFile(HUB_VEGA, newFiles[0]).length === m1Module.selfCheck.length,
+  );
+  ok(
+    "selfCheckCards with no self-check items returns no cards",
+    polarisLib.selfCheckCards({ subject: "X", module: { id: "M9", selfCheck: [] }, lessonDir: "l", roadmapPath: "r.json" }).length === 0,
+  );
+
+  // Failure paths: a card that would break the contract, or an unwritable inbox, fails the whole call before any
+  // Markdown is written (inbox first, then errorlog.md), so a retry is clean.
+  const LONG_MODULE = join(ENGINE_DIR, "Long_Module");
+  mkdirSync(join(LONG_MODULE, "polaris"), { recursive: true });
+  const longModuleId = "M" + "x".repeat(210);
+  const longRoadmap = JSON.parse(JSON.stringify(roadmapV));
+  longRoadmap.modules[0].id = longModuleId;
+  writeFileSync(join(LONG_MODULE, "polaris", "roadmap.json"), JSON.stringify(longRoadmap), "utf8");
+  before = inboxFilesOf(HUB_VEGA);
+  r = await call("polaris_lesson_done", { subject_dir: LONG_MODULE, lesson_dir: longModuleId, hub: HUB_VEGA });
+  ok(
+    "vega engine: a card that would break the contract fails the whole call and writes nothing",
+    r.isError &&
+      textOf(r).includes("nothing was written") &&
+      textOf(r).includes("key:") &&
+      inboxFilesOf(HUB_VEGA).length === before.length &&
+      !existsSync(join(LONG_MODULE, "polaris", "progress-state.json")),
+    textOf(r).split("\n")[0],
+  );
+  const HUB_BLOCKED = join(ENGINE_DIR, "hub_blocked");
+  mkdirSync(join(HUB_BLOCKED, ".vega"), { recursive: true });
+  writeFileSync(join(HUB_BLOCKED, ".vega", "inbox"), "a file where the inbox folder should be", "utf8");
+  const BLOCKED = join(ENGINE_DIR, "Blocked_Course");
+  mkdirSync(BLOCKED, { recursive: true });
+  r = await call("polaris_errorlog_add", { subject_dir: BLOCKED, entry: manualEntry, hub: HUB_BLOCKED });
+  ok(
+    "vega engine: an unwritable inbox fails the call and leaves errorlog.md untouched",
+    r.isError && !existsSync(join(BLOCKED, "polaris", "errorlog.md")),
+    textOf(r).split("\n")[0].slice(0, 100),
+  );
+
+  // Library level: an entry added outside a sync commits its own one-card inbox file
+  const soloEvent = mkEvt({
+    t: "2026-10-16T10:00:00+07:00",
+    slide: 9,
+    type: "recall",
+    palace: "Phòng khách",
+    station: 4,
+    place: "Ghế sofa",
+    item: "Điều kiện dừng của vòng lặp",
+    rating: "missed",
+  });
+  before = inboxFilesOf(HUB_VEGA);
+  const solo = await polarisLib.addRecallErrorLogEntry(V.dir, soloEvent, "M1", HUB_VEGA);
+  newFiles = inboxFilesOf(HUB_VEGA).filter((f) => !before.includes(f));
+  ok(
+    "library: addRecallErrorLogEntry without a batch commits its own inbox file with one card",
+    newFiles.length === 1 &&
+      readInboxFile(HUB_VEGA, newFiles[0]).length === 1 &&
+      readInboxFile(HUB_VEGA, newFiles[0])[0].key === solo.vegaKey &&
+      readInboxFile(HUB_VEGA, newFiles[0])[0].front === "Phòng khách · Ghế sofa: mục nào?" &&
+      solo.commit?.cards === 1,
+    solo.vegaKey,
+  );
+
+  // 3.21b.5 Vega engine: review_due and today keep the legacy steps and add the Vega line
+  const reviewDueArgs = { subject_dir: V.dir, date: "2026-10-16", hub: HUB_VEGA };
+  r = await call("polaris_review_due", reviewDueArgs);
+  ok(
+    "vega engine: review_due lists the legacy steps and a Vega line even when cards.json is missing",
+    !r.isError &&
+      textOf(r).includes("Danh sách ôn tập đến hạn tại ngày 2026-10-16: 2 mục") &&
+      textOf(r).includes("[Bài học] Ôn bài học: legacy-lesson") &&
+      textOf(r).includes("[D+1]") &&
+      textOf(r).includes("Thẻ nhớ Vega FSRS") &&
+      textOf(r).includes("chưa đọc được") &&
+      textOf(r).includes("0 thẻ đến hạn") &&
+      textOf(r).includes("vega_sync, rồi vega_session"),
+    textOf(r).split("\n").slice(-1)[0],
+  );
+  // Simulates Vega's own file (Polaris only reads it)
+  writeFileSync(join(HUB_VEGA, ".vega", "cards.json"), JSON.stringify(vegaCardsFixture, null, 2), "utf8");
+  r = await call("polaris_review_due", reviewDueArgs);
+  const rDueVega = r;
+  ok(
+    "vega engine: review_due shows the Vega due count (read-only from cards.json) and the next step",
+    !r.isError &&
+      textOf(r).includes("Danh sách ôn tập đến hạn tại ngày 2026-10-16: 2 mục") &&
+      textOf(r).includes("Thẻ nhớ Vega FSRS (bộ máy ôn tập hiện hành): 2 thẻ đến hạn tại ngày 2026-10-16 (2 thẻ thuộc môn này)") &&
+      textOf(r).includes("Bước tiếp theo: vega_sync, rồi vega_session"),
+    textOf(r).split("\n").slice(-1)[0],
+  );
+  r = await call("polaris_today", { subject_dir: V.dir, date: "2026-10-16", hub: HUB_VEGA });
+  const todayEngineLine = textOf(r).split("\n").find((l) => l.startsWith("Bộ máy ôn tập: Vega")) ?? "";
+  ok(
+    "vega engine: today keeps the Vega count line and adds the engine line with the Vietnamese next step",
+    !r.isError &&
+      textOf(r).includes("2 thẻ đến hạn hôm nay (2 thẻ thuộc môn này)") &&
+      textOf(r).includes("10 phút: Thẻ nhớ Vega FSRS (2 thẻ đến hạn)") &&
+      textOf(r).includes("vega_sync, then vega_session to review") &&
+      textOf(r).includes("Ôn bài học: legacy-lesson"),
+  );
+  ok(
+    "vega engine: the engine line of today carries the Vega due count and the next step vega_sync, rồi vega_session",
+    todayEngineLine.includes("2 thẻ đến hạn hôm nay (2 thẻ thuộc môn này)") && todayEngineLine.includes("vega_sync, rồi vega_session"),
+    todayEngineLine,
+  );
+  ok(
+    "vega engine: today moves on to the next lesson (completions recorded outside reviews.json)",
+    textOf(r).includes("Bài học tiếp theo:") && textOf(r).includes("02-agent-va-vong-lap-react-b"),
+    textOf(r).split("\n").find((l) => l.startsWith("Bài học tiếp theo")),
+  );
+
+  // 3.21b.6 Fixed engine: exactly the original behaviour, and no Vega artifacts
+  r = await call("polaris_review_due", { subject_dir: V.dir, date: "2026-10-16", hub: HUB_FIXED });
+  const rDueFixed = r;
+  ok(
+    "fixed engine: review_due is the legacy list only (no Vega line)",
+    !r.isError &&
+      textOf(r).includes("Danh sách ôn tập đến hạn tại ngày 2026-10-16: 2 mục") &&
+      !textOf(r).includes("Vega") &&
+      !textOf(r).includes("vega_sync"),
+  );
+  ok(
+    "vega engine: review_due is the legacy list unchanged plus exactly one Vega line",
+    textOf(rDueVega).startsWith(textOf(rDueFixed) + "\n\n") &&
+      textOf(rDueVega).slice(textOf(rDueFixed).length + 2).split("\n").length === 1,
+    textOf(rDueVega).slice(textOf(rDueFixed).length + 2, textOf(rDueFixed).length + 60),
+  );
+  r = await call("polaris_review_due", { subject_dir: join(ENGINE_DIR, "No_Roadmap"), date: "2026-10-16", hub: HUB_FIXED });
+  ok("fixed engine: review_due with nothing due keeps the original message", textOf(r).includes("Tuyệt vời! Không có mục ôn tập nào bị quá hạn."));
+  r = await call("polaris_today", { subject_dir: V.dir, date: "2026-10-16", hub: HUB_FIXED });
+  ok("fixed engine: today prints no Vega lines when there is no cards.json", !r.isError && !textOf(r).includes("Vega"));
+
+  const F = makeSubject("Fixed_Course");
+  r = await call("polaris_errorlog_add", { subject_dir: F.dir, entry: manualEntry, hub: HUB_FIXED });
+  const fErrorLog = readFileSync(join(F.dir, "polaris", "errorlog.md"), "utf8");
+  const fReviews = JSON.parse(readFileSync(join(F.dir, "polaris", "reviews.json"), "utf8"));
+  ok(
+    "fixed engine: errorlog_add keeps the D+ line, the D+ steps in reviews.json, and creates no .vega",
+    !r.isError &&
+      textOf(r).includes("Lịch ôn tập giãn cách đã tạo:") &&
+      textOf(r).includes("D+35: 2026-11-19") &&
+      fErrorLog.includes("- **Lịch ôn lại giãn cách:** D+1 (2026-10-16), D+3 (2026-10-18), D+7 (2026-10-22), D+16 (2026-10-31), D+35 (2026-11-19)") &&
+      !fErrorLog.includes("thẻ Vega") &&
+      fReviews.items.length === 1 &&
+      fReviews.items[0].steps.length === 5 &&
+      !existsSync(join(HUB_FIXED, ".vega")),
+  );
+  r = await call("polaris_lesson_done", { subject_dir: F.dir, lesson_dir: m2Lesson, date: "2026-10-16", score: "4/4", hub: HUB_FIXED });
+  const fReviews2 = JSON.parse(readFileSync(join(F.dir, "polaris", "reviews.json"), "utf8"));
+  ok(
+    "fixed engine: lesson_done schedules the 5 D+ steps in reviews.json and writes no inbox",
+    !r.isError &&
+      textOf(r).includes("Lịch ôn tập giãn cách đã lên lịch trong polaris/reviews.json:") &&
+      fReviews2.items.some((it) => it.id === `LESSON_${m2Lesson}` && it.steps.length === 5) &&
+      !existsSync(join(HUB_FIXED, ".vega")),
+  );
+  writeFileSync(join(F.courseDir, "progress.jsonl"), [vQuiz, vPredict, vRecall].map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
+  r = await call("polaris_progress_sync", { subject_dir: F.dir, hub: HUB_FIXED });
+  const fReviews3 = JSON.parse(readFileSync(join(F.dir, "polaris", "reviews.json"), "utf8"));
+  ok(
+    "fixed engine: progress_sync schedules D+ reviews for the 3 misses and writes no inbox",
+    !r.isError &&
+      textOf(r).includes("Mục mới thêm vào Sổ lỗi: 3") &&
+      !textOf(r).includes("Hộp thư Vega") &&
+      fReviews3.items.length === 5 &&
+      !readFileSync(join(F.dir, "polaris", "errorlog.md"), "utf8").includes("thẻ Vega") &&
+      !existsSync(join(HUB_FIXED, ".vega")),
+  );
+
+  // 3.21b.7 Profile override of the engine (method.reviewEngine)
+  const HUB_OVR_FIXED = join(ENGINE_DIR, "hub_override_fixed"); // .vega/ exists but the profile says fixed
+  const HUB_OVR_VEGA = join(ENGINE_DIR, "hub_override_vega"); // no .vega/ but the profile says vega
+  mkdirSync(join(HUB_OVR_FIXED, ".vega"), { recursive: true });
+  mkdirSync(HUB_OVR_VEGA, { recursive: true });
+  const O1 = join(ENGINE_DIR, "Override_Fixed");
+  const O2 = join(ENGINE_DIR, "Override_Vega");
+  mkdirSync(O1, { recursive: true });
+  mkdirSync(O2, { recursive: true });
+
+  r = await call("polaris_profile", { action: "update", patch: { method: { reviewEngine: "fixed" } }, hub: HUB_OVR_FIXED });
+  ok(
+    "profile override: method.reviewEngine=fixed wins over an existing .vega/",
+    !r.isError &&
+      textOf(r).includes('"reviewEngine": "fixed"') &&
+      textOf(r).includes("Bộ máy ôn tập hiệu lực (reviewEngine): fixed — đặt trong hồ sơ người học, method.reviewEngine"),
+    textOf(r).split("\n").slice(-1)[0],
+  );
+  r = await call("polaris_errorlog_add", { subject_dir: O1, entry: manualEntry, hub: HUB_OVR_FIXED });
+  ok(
+    "profile override fixed: D+ schedule in reviews.json and nothing in the inbox",
+    !r.isError &&
+      textOf(r).includes("Lịch ôn tập giãn cách đã tạo:") &&
+      JSON.parse(readFileSync(join(O1, "polaris", "reviews.json"), "utf8")).items.length === 1 &&
+      inboxFilesOf(HUB_OVR_FIXED).length === 0,
+  );
+  // Forced fixed next to a populated Vega folder: today keeps the original card-load line and nothing else from Vega
+  const HUB_FIXED_CARDS = join(ENGINE_DIR, "hub_fixed_with_cards");
+  mkdirSync(join(HUB_FIXED_CARDS, ".vega"), { recursive: true });
+  writeFileSync(join(HUB_FIXED_CARDS, ".vega", "cards.json"), JSON.stringify(vegaCardsFixture, null, 2), "utf8");
+  await call("polaris_profile", { action: "update", patch: { method: { reviewEngine: "fixed" } }, hub: HUB_FIXED_CARDS });
+  r = await call("polaris_today", { subject_dir: V.dir, date: "2026-10-16", hub: HUB_FIXED_CARDS });
+  ok(
+    "fixed engine next to a Vega folder: today keeps only the original card-load line (no engine line)",
+    !r.isError &&
+      textOf(r).includes("Thẻ nhớ Vega FSRS: 2 thẻ đến hạn hôm nay (2 thẻ thuộc môn này) · Bước tiếp theo: vega_sync, then vega_session to review") &&
+      !textOf(r).includes("Bộ máy ôn tập: Vega") &&
+      !textOf(r).includes("vega_sync, rồi vega_session"),
+  );
+  r = await call("polaris_review_due", { subject_dir: V.dir, date: "2026-10-16", hub: HUB_FIXED_CARDS });
+  ok(
+    "fixed engine next to a Vega folder: review_due is the legacy list only",
+    !r.isError && textOf(r) === textOf(rDueFixed),
+  );
+
+  r = await call("polaris_profile", { action: "update", patch: { method: { reviewEngine: "vega" } }, hub: HUB_OVR_VEGA });
+  ok(
+    "profile override: method.reviewEngine=vega works without .vega/",
+    !r.isError && textOf(r).includes("Bộ máy ôn tập hiệu lực (reviewEngine): vega — đặt trong hồ sơ người học, method.reviewEngine"),
+  );
+  r = await call("polaris_errorlog_add", { subject_dir: O2, entry: manualEntry, hub: HUB_OVR_VEGA });
+  const o2Files = inboxFilesOf(HUB_OVR_VEGA);
+  ok(
+    "profile override vega: the inbox folder is created on demand and gets one card; no reviews.json",
+    !r.isError &&
+      o2Files.length === 1 &&
+      readInboxFile(HUB_OVR_VEGA, o2Files[0]).length === 1 &&
+      !existsSync(join(O2, "polaris", "reviews.json")),
+  );
+  r = await call("polaris_profile", { action: "update", patch: { method: { reviewEngine: "fsrs" } }, hub: HUB_OVR_VEGA });
+  ok("profile override: an unknown engine is rejected", r.isError && textOf(r).includes("reviewEngine"), textOf(r).split("\n")[1]);
+  r = await call("polaris_profile", { action: "update", patch: { method: { reviewEngine: null } }, hub: HUB_OVR_FIXED });
+  ok(
+    "profile override: null removes the override and returns to auto-detection",
+    !r.isError &&
+      !textOf(r).includes('"reviewEngine"') &&
+      textOf(r).includes("Bộ máy ôn tập hiệu lực (reviewEngine): vega — tự nhận diện, có thư mục"),
+    textOf(r).split("\n").slice(-1)[0],
+  );
+
+  r = await call("polaris_today", { subject_dir: O1, date: "2026-10-16", hub: HUB_OVR_FIXED });
+  const noCardsEngineLine = textOf(r).split("\n").find((l) => l.startsWith("Bộ máy ôn tập: Vega")) ?? "";
+  ok(
+    "vega engine: today without cards.json says so, counts 0 and still names the next step",
+    !r.isError &&
+      noCardsEngineLine.includes("chưa đọc được") &&
+      noCardsEngineLine.includes("0 thẻ đến hạn") &&
+      noCardsEngineLine.includes("vega_sync, rồi vega_session") &&
+      !textOf(r).includes("vega_sync, then vega_session to review"),
+    noCardsEngineLine.slice(0, 120),
+  );
+
+  // 3.21b.8 Guide topics document the engines, the inbox and the evidence
+  r = await call("polaris_guide", { topic: "learner", hub: HUB_VEGA });
+  ok(
+    "guide learner: documents method.reviewEngine and shows the engine in force",
+    !r.isError && textOf(r).includes("method.reviewEngine") && textOf(r).includes("Bộ máy ôn tập hiệu lực (reviewEngine): vega"),
+  );
+  r = await call("polaris_guide", { topic: "tracking" });
+  ok(
+    "guide tracking: Vega is the single review engine, the inbox contract and the evidence are named",
+    !r.isError &&
+      textOf(r).includes("Sổ lỗi (Error Log):") &&
+      textOf(r).includes("vega-card-inbox.v1") &&
+      textOf(r).includes("Latimier") &&
+      textOf(r).includes("Lindsey") &&
+      textOf(r).includes("Rawson"),
+  );
+  r = await call("polaris_guide", { topic: "progress" });
+  ok("guide progress: describes the Vega hand-off", !r.isError && textOf(r).includes("Event Contract:") && textOf(r).includes("polaris-selfcheck"));
+  r = await call("polaris_guide", { topic: "today" });
+  ok("guide today: keeps the Vega card load and names the Vietnamese next step", !r.isError && textOf(r).includes("Vega FSRS Card Load:") && textOf(r).includes("vega_sync, rồi vega_session"));
+  r = await call("polaris_guide");
+  ok("guide overview: names Vega as the single review engine and the inbox", !r.isError && textOf(r).includes("Vega") && textOf(r).includes("inbox"));
+
+  // 3.21b.9 Inbox contract: validator and atomic writer (library level)
+  const goodLine = {
+    v: 1,
+    t: "2026-10-12T08:30:00Z",
+    producer: "polaris",
+    key: "polaris:Machine_Learning:ERR_2026-10-12_ab12cd",
+    subject: "Machine_Learning",
+    front: "Tình huống cần giải lại?",
+    back: "Nguyên nhân và quy tắc.",
+    origin: { kind: "polaris-errorlog", path: "D:/hub/Machine_Learning/polaris/errorlog.md", locator: "ERR_2026-10-12_ab12cd" },
+  };
+  const rejects = (patch, needle) => {
+    const res = polarisLib.validateInboxLine({ ...goodLine, ...patch });
+    return !res.ok && res.errors.some((e) => e.includes(needle));
+  };
+  ok("inbox validator: accepts a minimal valid line", polarisLib.validateInboxLine(goodLine).ok);
+  ok(
+    "inbox validator: accepts every optional field within limits",
+    polarisLib.validateInboxLine({
+      ...goodLine,
+      t: "2026-10-12T08:30:00.123+07:00",
+      deck: "01-vong-lap",
+      kind: "cloze",
+      back: "",
+      hint: "gợi ý",
+      hook: "neo",
+      tags: ["a", "b"],
+      reason: "vì sao",
+      origin: { kind: "mira-stop", path: "p", locator: "stop-3", href: "http://localhost/player#stop-3" },
+    }).ok,
+  );
+  ok("inbox validator: rejects a key without the <producer>: prefix", rejects({ key: "orion:x" }, "must start with"));
+  ok("inbox validator: rejects unknown fields (top level)", rejects({ extra: 1 }, "unknown field"));
+  ok("inbox validator: rejects unknown fields (origin)", rejects({ origin: { ...goodLine.origin, note: "x" } }, "origin.note"));
+  ok("inbox validator: rejects v other than 1", rejects({ v: 2 }, "v:"));
+  ok("inbox validator: rejects a time without offset or Z", rejects({ t: "2026-10-12T08:30:00" }, "t:"));
+  ok("inbox validator: rejects an impossible date", rejects({ t: "2026-13-45T08:30:00Z" }, "t:"));
+  ok("inbox validator: rejects an unknown producer", rejects({ producer: "vega" }, "producer"));
+  ok("inbox validator: rejects an empty front", rejects({ front: "" }, "front:"));
+  ok("inbox validator: rejects a front over 600 chars", rejects({ front: "x".repeat(601) }, "front:"));
+  ok("inbox validator: rejects a back over 1200 chars", rejects({ back: "x".repeat(1201) }, "back:"));
+  ok("inbox validator: rejects a key over 200 chars", rejects({ key: "polaris:" + "k".repeat(200) }, "key:"));
+  ok("inbox validator: rejects an unknown card kind", rejects({ kind: "image" }, "kind:"));
+  ok("inbox validator: rejects an unknown origin kind", rejects({ origin: { ...goodLine.origin, kind: "web" } }, "origin.kind"));
+  ok("inbox validator: rejects an empty origin path", rejects({ origin: { ...goodLine.origin, path: "" } }, "origin.path"));
+  ok("inbox validator: rejects more than 10 tags", rejects({ tags: Array.from({ length: 11 }, (_, i) => `t${i}`) }, "tags:"));
+  ok("inbox validator: rejects a tag over 40 chars", rejects({ tags: ["x".repeat(41)] }, "tags[0]"));
+  ok("inbox validator: rejects emoji in the front", rejects({ front: `Câu hỏi ${String.fromCodePoint(0x1f600)}` }, "emoji"));
+  ok("inbox validator: rejects a missing subject", rejects({ subject: undefined }, "subject"));
+
+  // Card builders keep every card inside the contract, whatever the learner typed
+  const longText = "câu dài ".repeat(400);
+  const longCard = polarisLib.manualErrorCard({
+    subject: "S",
+    entryId: "ERR_2026-10-16_000000",
+    errorlogPath: "D:/x/polaris/errorlog.md",
+    entry: { date: "2026-10-16", result: longText, prediction: longText, why: longText, fix: longText },
+  });
+  ok(
+    "cards: oversized entry text is clamped to the contract limits, keeps the question, and stays valid",
+    polarisLib.validateInboxLine(longCard).ok &&
+      longCard.front.length <= 600 &&
+      longCard.back.length <= 1200 &&
+      longCard.front.endsWith("là gì?"),
+    `front ${longCard.front.length}, back ${longCard.back.length}`,
+  );
+  const emojiCard = polarisLib.quizErrorCard({
+    subject: "S",
+    entryId: "ERR_2026-10-16_000001",
+    errorlogPath: "D:\\x\\polaris\\errorlog.md",
+    event: {
+      v: 1,
+      t: "2026-10-16T09:00:00+07:00",
+      lesson: "01-a",
+      slide: 2,
+      type: "quiz",
+      question: `Câu hỏi ${String.fromCodePoint(0x1f600)} có emoji?`,
+      chosen: [0],
+      answer: [1],
+      correct: false,
+    },
+  });
+  ok(
+    "cards: emoji is stripped and Windows paths become forward slashes, so the card stays valid",
+    polarisLib.validateInboxLine(emojiCard).ok &&
+      !emojiCard.front.includes(String.fromCodePoint(0x1f600)) &&
+      emojiCard.origin.path === "D:/x/polaris/errorlog.md",
+    emojiCard.front,
+  );
+
+  const HUB_W = join(ENGINE_DIR, "hub_writer");
+  let rejectedBatch = "";
+  try {
+    await polarisLib.writeInboxBatch(HUB_W, "polaris", [goodLine, { ...goodLine, key: "orion:wrong-prefix" }]);
+  } catch (e) {
+    rejectedBatch = polarisLib.errMsg(e);
+  }
+  ok(
+    "inbox writer: a batch with one invalid line is rejected before writing (nothing created, errors reported)",
+    rejectedBatch.includes("nothing was written") && rejectedBatch.includes("orion:wrong-prefix") && !existsSync(join(HUB_W, ".vega")),
+    rejectedBatch.split("\n")[0],
+  );
+  const lsLine = { ...goodLine, key: "polaris:Machine_Learning:ERR_2026-10-12_000001", back: `hai${String.fromCharCode(0x2028)}dòng` };
+  const written = await polarisLib.writeInboxBatch(HUB_W, "polaris", [
+    goodLine,
+    lsLine,
+    { ...goodLine, back: "same key again" },
+  ]);
+  const writtenText = readFileSync(written.file, "utf8");
+  ok(
+    "inbox writer: one atomic file <producer>-<stamp>-<hex>.jsonl, trailing newline, in-batch duplicate key dropped",
+    written.written === 2 &&
+      written.duplicatesInBatch === 1 &&
+      polarisLib.INBOX_FILE_NAME_RE.test(written.fileName) &&
+      writtenText.endsWith("\n") &&
+      writtenText.trim().split("\n").length === 2 &&
+      readdirSync(join(HUB_W, ".vega", "inbox")).every((f) => !f.endsWith(".tmp")),
+    written.fileName,
+  );
+  ok(
+    "inbox writer: U+2028 is escaped so line readers never split a card, and the text round-trips",
+    !writtenText.includes(String.fromCharCode(0x2028)) &&
+      JSON.parse(writtenText.trim().split("\n")[1]).back === lsLine.back,
+  );
+  const second = await polarisLib.writeInboxBatch(HUB_W, "polaris", [goodLine]);
+  ok(
+    "inbox writer: never rewrites an existing file (each batch is a new file)",
+    second.file !== written.file && readFileSync(written.file, "utf8") === writtenText,
+  );
+  const emptyBatch = await polarisLib.writeInboxBatch(HUB_W, "polaris", []);
+  ok("inbox writer: an empty batch writes no file", emptyBatch.written === 0 && emptyBatch.file === undefined);
+
   // 3.22 CLI tests
   const guideCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "guide", "schedule"], { encoding: "utf8" });
   ok("CLI guide schedule", guideCli.includes("Topological Sorting:"));
@@ -1841,7 +2635,7 @@ try {
   ok("CLI today", todayCli.includes("Kế hoạch phiên học") && todayCli.includes("## Today's Dynamic Goal"));
 
   const versionCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "version"], { encoding: "utf8" });
-  ok("CLI version 0.3.6", versionCli.trim() === "0.3.6");
+  ok("CLI version 0.4.0", versionCli.trim() === "0.4.0");
 
   const helpCli = execFileSync(process.execPath, [join(ROOT, "dist", "polaris.mjs"), "help"], { encoding: "utf8" });
   ok("CLI help", helpCli.includes("Usage: node polaris.mjs") && helpCli.includes("progress <subject_dir>") && helpCli.includes("today <subject_dir>"));

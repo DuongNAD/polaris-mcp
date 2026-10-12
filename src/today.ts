@@ -1,15 +1,17 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+import { resolveReviewEngine } from "./engine.js";
 import {
   type CourseMap,
   type ProgressState,
+  type ReviewEngine,
   type ReviewsData,
   type Roadmap,
   type Schedule,
 } from "./schema.js";
 import { getProfile, readBrief, readRoadmap } from "./store.js";
-import { getDueReviews } from "./tracking.js";
+import { getDueReviews, type DueReviewsResult } from "./tracking.js";
 import { notifySmartDrive } from "./smartdrive.js";
 import {
   atomicWriteFile,
@@ -66,6 +68,8 @@ export interface TodayResult {
   minutes: number;
   subjectTitle: string;
   dueReviewsCount: number;
+  /** Effective review engine (see engine.ts). */
+  reviewEngine: ReviewEngine;
   vegaDueCount?: number;
   vegaSubjectDueCount?: number;
   nextLesson?: NextLessonInfo;
@@ -201,11 +205,70 @@ export async function readVegaCards(
   }
 }
 
+/** Vega due cards for one subject, read-only from `<hub>/.vega/cards.json` (undefined when absent or unreadable). */
+export async function readVegaDueForSubject(
+  subjectDir: string,
+  hub: string,
+  targetDate: string,
+): Promise<VegaCardsLoad | undefined> {
+  const brief = await readBrief(subjectDir);
+  const roadmap = await readRoadmap(subjectDir);
+  const subjectTitle = roadmap?.title || brief?.subject || "Khóa học";
+  const slug = brief?.slug || slugify(roadmap?.title || "course");
+  return readVegaCards(hub, targetDate, {
+    subjectDir,
+    subjectTitle,
+    slug,
+    briefSubject: brief?.subject,
+    briefSlug: brief?.slug,
+  });
+}
+
+export interface ReviewDueReport extends DueReviewsResult {
+  engine: ReviewEngine;
+  /** Vega engine only: cards due by the end of the target date (undefined when cards.json is absent or unreadable). */
+  vega?: VegaCardsLoad;
+  /** Vega engine only: the one line with the Vega due count and the next step. */
+  vegaLine?: string;
+}
+
+/**
+ * `polaris_review_due`: the legacy fixed steps already in polaris/reviews.json (never deleted or migrated) and, under
+ * the Vega engine, one line with the Vega due count and the next step `vega_sync, rồi vega_session`.
+ */
+export async function getReviewDueReport(subjectDir: string, date?: string, hub?: string): Promise<ReviewDueReport> {
+  const info = await resolveReviewEngine(hub);
+  const base = await getDueReviews(subjectDir, date);
+  if (info.engine !== "vega") {
+    return { ...base, engine: info.engine };
+  }
+
+  const vega = await readVegaDueForSubject(subjectDir, info.hub, base.targetDate);
+  const cardsPath = join(info.hub, ".vega", "cards.json").replace(/\\/g, "/");
+  const next = "Bước tiếp theo: vega_sync, rồi vega_session";
+  let vegaLine: string;
+  if (vega) {
+    const subjectPart = vega.hasSubjectCards ? ` (${vega.subjectDueCount} thẻ thuộc môn này)` : "";
+    vegaLine = `Thẻ nhớ Vega FSRS (bộ máy ôn tập hiện hành): ${vega.dueCount} thẻ đến hạn tại ngày ${base.targetDate}${subjectPart} · ${next}`;
+  } else {
+    vegaLine = `Thẻ nhớ Vega FSRS (bộ máy ôn tập hiện hành): chưa đọc được ${cardsPath} (0 thẻ đến hạn) · ${next}`;
+  }
+
+  return {
+    ...base,
+    engine: "vega",
+    vega,
+    vegaLine,
+    summary: [base.summary, "", vegaLine].join("\n"),
+  };
+}
+
 export async function getTodayPlan(options: TodayOptions): Promise<TodayResult> {
   const { subject_dir } = options;
   const p = subjectPaths(subject_dir);
   const targetDate = options.date || todayIso();
   const hub = options.hub ? resolve(options.hub) : hubDir();
+  const engine = await resolveReviewEngine(hub);
 
   const brief = await readBrief(subject_dir);
   const roadmap = await readRoadmap(subject_dir);
@@ -451,18 +514,38 @@ export async function getTodayPlan(options: TodayOptions): Promise<TodayResult> 
     lines.push("", "Mục ôn tập: Không có mục nào bị quá hạn.");
   }
 
+  // Vega block. The card-load line (read-only cards.json) is unchanged under both engines. The Vega engine adds one
+  // engine line carrying the due count and the next step `vega_sync, rồi vega_session`.
+  const vegaBlock: string[] = [];
   if (vegaCardsLoad) {
-    lines.push("");
     if (vegaCardsLoad.dueCount > 0) {
       const subjectPart = vegaCardsLoad.hasSubjectCards
         ? ` (${vegaCardsLoad.subjectDueCount} thẻ thuộc môn này)`
         : "";
-      lines.push(
+      vegaBlock.push(
         `Thẻ nhớ Vega FSRS: ${vegaCardsLoad.dueCount} thẻ đến hạn hôm nay${subjectPart} · Bước tiếp theo: vega_sync, then vega_session to review`,
       );
     } else {
-      lines.push("Thẻ nhớ Vega FSRS: 0 thẻ đến hạn.");
+      vegaBlock.push("Thẻ nhớ Vega FSRS: 0 thẻ đến hạn.");
     }
+  }
+  if (engine.engine === "vega") {
+    let loadPart: string;
+    if (vegaCardsLoad) {
+      const subjectPart = vegaCardsLoad.hasSubjectCards
+        ? ` (${vegaCardsLoad.subjectDueCount} thẻ thuộc môn này)`
+        : "";
+      loadPart = `${vegaCardsLoad.dueCount} thẻ đến hạn hôm nay${subjectPart}`;
+    } else {
+      const cardsPath = join(hub, ".vega", "cards.json").replace(/\\/g, "/");
+      loadPart = `chưa đọc được ${cardsPath} (0 thẻ đến hạn)`;
+    }
+    vegaBlock.push(
+      `Bộ máy ôn tập: Vega (FSRS lập lịch) · ${loadPart} · Bước tiếp theo: vega_sync, rồi vega_session (giải lại từng thẻ, không đọc lại).`,
+    );
+  }
+  if (vegaBlock.length > 0) {
+    lines.push("", ...vegaBlock);
   }
 
   if (nextLesson) {
@@ -487,6 +570,7 @@ export async function getTodayPlan(options: TodayOptions): Promise<TodayResult> 
     minutes,
     subjectTitle,
     dueReviewsCount: due.dueCount,
+    reviewEngine: engine.engine,
     vegaDueCount: vegaCardsLoad?.dueCount,
     vegaSubjectDueCount: vegaCardsLoad?.subjectDueCount,
     nextLesson,

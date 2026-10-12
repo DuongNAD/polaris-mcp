@@ -67,14 +67,21 @@ export async function getProfile(hub?: string): Promise<LearnerProfile> {
 
 export async function updateProfile(patch: Record<string, unknown>, hub?: string): Promise<LearnerProfile> {
   const current = await getProfile(hub);
+
+  // method.reviewEngine: null removes the override and returns to auto-detection (vega when <hub>/.vega/ exists).
+  const methodPatch =
+    patch.method && typeof patch.method === "object" ? (patch.method as Record<string, unknown>) : undefined;
+  const method: Record<string, unknown> = methodPatch ? { ...current.method, ...methodPatch } : { ...current.method };
+  if (methodPatch && methodPatch.reviewEngine === null) {
+    delete method.reviewEngine;
+  }
+
   const merged = {
     ...current,
     ...patch,
     slots: patch.slots && Array.isArray(patch.slots) ? patch.slots : current.slots,
     blackouts: patch.blackouts && Array.isArray(patch.blackouts) ? patch.blackouts : current.blackouts,
-    method: patch.method && typeof patch.method === "object"
-      ? { ...current.method, ...(patch.method as Record<string, unknown>) }
-      : current.method,
+    method,
     taste: patch.taste && typeof patch.taste === "object"
       ? { ...current.taste, ...(patch.taste as Record<string, unknown>) }
       : current.taste,
