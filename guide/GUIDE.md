@@ -13,6 +13,30 @@ Polaris operates on five core principles:
 
 **One review engine (v0.4.0):** spaced reviews are scheduled by a single adaptive engine, Vega (FSRS), not by Polaris's own fixed D+1/D+3/D+7/D+16/D+35 steps. Polaris keeps the human-readable error log ("Sổ lỗi") and hands review items to Vega through a shared inbox (`<hub>/.vega/inbox/`, contract `vega-card-inbox.v1`); the learner then runs `vega_sync` and `vega_session`. The profile field `method.reviewEngine` (`"vega"` or `"fixed"`) overrides the automatic choice (vega when `<hub>/.vega/` exists, else fixed). See the `tracking` and `learner` topics.
 
+### Ecosystem
+
+All projects by DuongNAD:
+
+| Project | Role | Repository |
+| :--- | :--- | :--- |
+| **Polaris** | Course architect: sources, facts with locators, roadmap, schedule, error log | [polaris-mcp](https://github.com/DuongNAD/polaris-mcp) |
+| **Aurora Slides** | Keynote-style lessons: quizzes, predict and trace slides, progress events | [aurora-slides-mcp](https://github.com/DuongNAD/aurora-slides-mcp) |
+| **Vega** | FSRS memory engine and the single review queue (card inbox) | [vega-mcp](https://github.com/DuongNAD/vega-mcp) |
+| **Orion** | Practice labs with real tests, tutoring ladder and PRIMM warm-up | [orion-mcp](https://github.com/DuongNAD/orion-mcp) |
+| **Mira** | Code-tracing lab: real Python traces, line-by-line players with prediction gates | [mira-mcp](https://github.com/DuongNAD/mira-mcp) |
+| **Rigel** | Grounded tutor: answers from the learner's lesson materials with [ref] citations | [rigel-mcp](https://github.com/DuongNAD/rigel-mcp) |
+| **Sirius** | Execution loop: deadlines, triage, today router, session timer, weekly review | [sirius-mcp](https://github.com/DuongNAD/sirius-mcp) |
+| **Constellation** | MCP registration, health checks and shared contracts | [constellation-mcp](https://github.com/DuongNAD/constellation-mcp) |
+| **SmartDrive-OS** | SSD governance, index and learning search | [smart-drive-os](https://github.com/DuongNAD/smart-drive-os) |
+
+### Connections
+
+- Aurora: exports `course.json` and lesson outlines; reads Aurora `progress.jsonl` (`aurora-progress-event.v1`) into the error log.
+- Vega: error-log entries and lesson self-checks become cards in the Vega inbox (`vega-card-inbox.v1`).
+- Rigel: `[ref]` + locator from Rigel's `search_material` are valid fact locators for course materials.
+- SmartDrive-OS: the post-write hook keeps the learning index fresh; learning search over facts and outlines.
+- Sirius: reads the error log and review steps as study evidence (read-only).
+
 ## pipeline
 
 The Polaris workflow follows 4 distinct stages:

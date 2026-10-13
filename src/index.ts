@@ -111,6 +111,7 @@ Workflow:
 
 Rules:
 - Evidence first: every factual bullet points to facts; every fact points to a source + locator (page [p. N], timestamp [mm:ss], section, lines).
+- Course-material facts: use Rigel's search_material [ref] and locator (e.g. "D3#12 · slide 7") as the fact locator.
 - Labels: [Khóa học] (learner source of truth), [Mở rộng] (extensions), (chưa xác minh) (unverified). Numbers and dates must be cross-checked or marked unverified.
 - Learner fit: learner-facing text in the learner's language (Vietnamese by default with correct diacritics); no emoji; no overclaims.
 - Review gate: show top research candidates with evaluation reasons and wait for approval unless auto_add is explicitly specified.

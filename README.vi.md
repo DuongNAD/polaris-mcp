@@ -167,13 +167,27 @@ flowchart TD
 
 ### Hệ sinh thái
 
-| Dự án | Vai trò |
-|---|---|
-| **Polaris** (repo này) | Kiến trúc sư thiết kế khóa học |
-| **[Aurora Slides](https://github.com/DuongNAD/aurora-slides-mcp)** | Bài giảng, thực hành và luồng sự kiện tiến độ |
-| **[Vega](https://github.com/DuongNAD/vega-mcp)** | Động cơ ghi nhớ thẻ ngắt quãng FSRS (`<hub>/.vega/cards.json`); bộ máy ôn tập duy nhất, được Polaris nạp qua `<hub>/.vega/inbox/` |
-| **[SmartDrive-OS](https://github.com/DuongNAD/smart-drive-os)** | Quản trị ổ SSD, tìm kiếm thông minh theo facts/sources/captures, bảo vệ thư mục môn học, hook cập nhật chỉ mục sau khi ghi |
-| **[Constellation](https://github.com/DuongNAD/constellation-mcp)** | Một bản kê (manifest) duy nhất, đăng ký vào Claude Code / Antigravity / Cursor / Codex, kiểm tra sức khỏe, chẩn đoán lệch cấu hình (drift doctor), cập nhật |
+Mọi dự án của DuongNAD:
+
+| Dự án | Vai trò | Kho mã |
+| :--- | :--- | :--- |
+| **Polaris** | Kiến trúc khóa học: nguồn, dữ kiện có vị trí trích, lộ trình, lịch học, Sổ lỗi | [polaris-mcp](https://github.com/DuongNAD/polaris-mcp) |
+| **Aurora Slides** | Bài học kiểu keynote: trắc nghiệm, slide dự đoán và dò code, sự kiện tiến độ | [aurora-slides-mcp](https://github.com/DuongNAD/aurora-slides-mcp) |
+| **Vega** | Bộ nhớ FSRS và hàng đợi ôn tập duy nhất (hộp thư thẻ) | [vega-mcp](https://github.com/DuongNAD/vega-mcp) |
+| **Orion** | Lab thực hành chấm bằng test thật, bậc thang gợi ý, bậc khởi động PRIMM | [orion-mcp](https://github.com/DuongNAD/orion-mcp) |
+| **Mira** | Dò code: trace Python thật, trình phát từng dòng có điểm dừng dự đoán | [mira-mcp](https://github.com/DuongNAD/mira-mcp) |
+| **Rigel** | Gia sư bám tài liệu: trả lời từ tài liệu bài học, có trích dẫn [ref] | [rigel-mcp](https://github.com/DuongNAD/rigel-mcp) |
+| **Sirius** | Vòng thực thi: hạn chót, phân loại việc, hôm nay học gì, bấm giờ, tổng kết tuần | [sirius-mcp](https://github.com/DuongNAD/sirius-mcp) |
+| **Constellation** | Đăng ký MCP, kiểm tra sức khỏe, hợp đồng dữ liệu chung | [constellation-mcp](https://github.com/DuongNAD/constellation-mcp) |
+| **SmartDrive-OS** | Quản trị SSD, chỉ mục và tìm kiếm tài liệu học | [smart-drive-os](https://github.com/DuongNAD/smart-drive-os) |
+
+### Kết nối
+
+- Aurora: xuất `course.json` và dàn ý bài học; đọc `progress.jsonl` của Aurora (`aurora-progress-event.v1`) vào Sổ lỗi.
+- Vega: mục Sổ lỗi và câu tự kiểm tra của bài học trở thành thẻ trong hộp thư thẻ của Vega (`vega-card-inbox.v1`).
+- Rigel: `[ref]` kèm vị trí trích từ `search_material` của Rigel là vị trí trích hợp lệ cho dữ kiện lấy từ tài liệu khóa học.
+- SmartDrive-OS: hook sau khi ghi giữ chỉ mục học tập luôn mới; tìm kiếm tài liệu học trên dữ kiện và dàn ý.
+- Sirius: đọc Sổ lỗi và các bước ôn tập làm bằng chứng học tập (chỉ đọc).
 
 ### Cài đặt hai máy chủ MCP song hành
 
