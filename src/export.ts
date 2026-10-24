@@ -425,7 +425,16 @@ function renderLessonOutline(params: RenderOutlineParams): string {
       const pth = mat.path ? `path: \`${mat.path}\`` : "";
       const url = mat.url ? `url: ${mat.url}` : "";
       lines.push(`- **${mat.title}** (${mat.minutes} phút) ${pth} ${url}`);
-      lines.push(`  - Gợi ý slide: dùng slide \`split\` hoặc \`code-run\` với file \`${mat.path || mat.title}\` và trích dẫn dòng cốt lõi.`);
+      const isPy = (mat.path || mat.title || "").endsWith(".py");
+      if (isPy) {
+        lines.push(
+          `  - Gợi ý slide: dùng slide \`code\` với \`file\` và các dòng cốt lõi \`lines\` (trích dẫn nguyên văn, không gõ lại), sau đó chạy thật bằng Mira (\`mira_record\` { file, call } -> \`mira_build\`) và chèn slide \`trace\` ngay sau slide \`code\`; chỉ dùng \`predict\` khi đầu ra không thể trace được.`,
+        );
+      } else {
+        lines.push(
+          `  - Gợi ý slide: dùng slide \`code\` (hoặc \`split\` kèm \`code\`) với \`file\` và các dòng cốt lõi \`lines\`.`,
+        );
+      }
     });
   } else {
     lines.push(`- Tham chiếu tài liệu mã nguồn trong thư mục \`03_Materials_Code\`.`);
@@ -435,12 +444,12 @@ function renderLessonOutline(params: RenderOutlineParams): string {
   // 9. Dàn ý Slide đề xuất
   lines.push("## 9. Dàn ý Slide đề xuất (Slide Plan Skeleton)");
   lines.push("1. `title`: Tiêu đề bài học và cam kết đầu ra rõ ràng");
-  lines.push("2. `big-fact` / `split`: Trực giác nền tảng và lý thuyết cốt lõi kèm citation `source`");
-  lines.push("3. `steps` / `cards`: Neo trí nhớ (Memory anchors, hình ảnh hóa hoặc memory palace)");
-  lines.push("4. `quote` / `markdown`: Trang vở ghi chép (Notebook 4-8 dòng chép tay)");
-  lines.push("5. `code-run` / `split`: Dự đoán kết quả rồi mới chạy (Predict-then-run, dễ -> khó)");
-  lines.push("6. `quiz`: Câu hỏi trắc nghiệm kiểm tra nhanh với phương án nhiễu từ hiểu lầm");
-  lines.push("7. `bullets` / `steps`: Đi bộ hồi tưởng (Recall walk qua các chặng)");
+  lines.push("2. `statement` / `split` / `definition` / `formula`: Trực giác nền tảng và lý thuyết cốt lõi kèm citation `source`");
+  lines.push("3. `palace` / `anchors` / `analogy` / `mnemonic`: Neo trí nhớ (Memory anchors)");
+  lines.push("4. `notebook`: Trang vở ghi chép (Notebook 4-8 dòng chép tay)");
+  lines.push("5. `code` (file + lines) theo sau bởi `trace` (Mira): Đọc code thật, xem code chạy từng dòng và dự đoán tại mỗi điểm dừng; chỉ dùng `predict` cho đầu ra không thể trace được");
+  lines.push("6. `exercise` (dễ -> khó) / `quiz` (phương án nhiễu từ hiểu lầm) / `cloze`");
+  lines.push("7. `palace` với mode \"recall\": Đi bộ hồi tưởng (Recall walk)");
   lines.push("8. `summary`: Tổng kết kiến thức và bài tập tiếp theo");
   lines.push("");
 

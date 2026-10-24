@@ -98,7 +98,7 @@ Workflow:
 6. polaris_roadmap_save { subject_dir, roadmap } to validate quality gates and render ROADMAP.md in Vietnamese.
 7. polaris_check { subject_dir } to verify that all quality gates pass.
 8. polaris_schedule { subject_dir, start?, interleave_every? } to deterministically fit module hours into learner slots minus blackouts and P0 deadlines, writing schedule.json and ROADMAP.md section 3.2.
-9. polaris_export_course { subject_dir, course_dir? } to write Aurora course.json and lesson outline skeletons in polaris/lessons/<dir>.outline.md.
+9. polaris_export_course { subject_dir, course_dir? } to write Aurora course.json and lesson outline skeletons in polaris/lessons/<dir>.outline.md (real slide types, quoting code via file+lines, and tracing Python with Mira).
 10. polaris_tasks_sync { subject_dir } to append scheduled lesson and checkpoint tasks to TASKS.md under ## Polaris.
 11. Tracking & Spaced Repetition. One review engine decides who schedules (profile method.reviewEngine; unset = vega when <hub>/.vega/ exists, else fixed):
     - vega: Vega (FSRS) is the single adaptive scheduler. Polaris keeps the human-readable Sổ lỗi (polaris/errorlog.md) and hands one card per entry, and per lesson self-check question, to Vega through the inbox <hub>/.vega/inbox/ (contract vega-card-inbox.v1, one file per tool call). Nothing is added to reviews.json. Next: vega_sync, then vega_session.
@@ -600,7 +600,7 @@ async function startMcp(): Promise<void> {
     {
       title: "Export course to Aurora Slides",
       description:
-        "Generate Aurora Slides course.json and lesson outline skeletons in polaris/lessons/<dir>.outline.md. Automatically splits long modules (> 2.5h) into a/b lessons, rotates visual themes, assigns Phosphor icons, and preserves existing customizations idempotently.",
+        "Generate Aurora Slides course.json and lesson outline skeletons in polaris/lessons/<dir>.outline.md (specifying real Aurora slide types, quoting code via file+lines, and tracing Python with Mira). Automatically splits long modules (> 2.5h) into a/b lessons, rotates visual themes, assigns Phosphor icons, and preserves existing customizations idempotently.",
       inputSchema: {
         subject_dir: z.string().min(1).describe("Subject directory path"),
         course_dir: z.string().optional().describe("Target Aurora course directory (defaults to <subject>/05_Slides/<slug>)"),
@@ -790,7 +790,7 @@ async function startMcp(): Promise<void> {
               "9. polaris_schedule to deterministically fit module hours into slots minus blackouts and P0 deadlines, writing schedule.json and updating Section 3.2.",
               "10. polaris_export_course to generate Aurora course.json and lesson outline skeletons in polaris/lessons/<dir>.outline.md.",
               "11. polaris_tasks_sync to append scheduled lesson and checkpoint tasks to TASKS.md under ## Polaris.",
-              "12. Build the first lesson deck with Aurora Slides tools according to its outline skeleton.",
+              "12. Build the first lesson deck with Aurora Slides tools according to its outline skeleton (quote code via `code` slide with file+lines and run Python with Mira for a `trace` slide).",
             ].join("\n"),
           },
         },
@@ -853,7 +853,7 @@ async function startMcp(): Promise<void> {
               "1. Run polaris_progress_sync to ingest recent Aurora progress events, update Sổ lỗi, and schedule spaced reviews.",
               "2. Run polaris_today to get today's session plan (due reviews, next lesson, practice tier, and Definition of Done).",
               "3. Inspect polaris/course-map.json and polaris/lessons/ to find the target lesson outline skeleton.",
-              "4. Follow the lesson outline skeleton: Title, Theory, Anchors (Memory palace & visual anchors), Notebook page (4-8 lines), Predict-then-run practice (easy -> hard), Quiz (with distractors from misconceptions), Recall walk, and Summary.",
+              "4. Follow the lesson outline skeleton: Title, Theory, Anchors (Memory palace & visual anchors), Notebook page (4-8 lines), Predict-then-run practice (easy -> hard), Quiz (with distractors from misconceptions), Recall walk, and Summary. For Python the course ships, quote it with a `code` slide (`file` + `lines`) and then run it for real with Mira (mira_record -> mira_build) to get a `trace` slide right after; use `predict` only for output Mira cannot trace.",
               "5. Build the deck in <course_dir>/<lesson_dir>/deck.json using Aurora Slides tools, strictly adhering to Aurora accuracy rules and citing facts in `source`.",
               "6. Run aurora_audit to verify slide length, typography, and contrast.",
               "7. Run polaris_tasks_sync to keep tasks synchronized.",
